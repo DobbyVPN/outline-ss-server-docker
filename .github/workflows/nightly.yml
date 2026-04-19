@@ -18,6 +18,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set image base
+        id: image
+        run: echo "base=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/outline-ss-server" >> "$GITHUB_OUTPUT"
+
       - name: Get latest tunnel-server release
         id: release
         env:
@@ -46,7 +50,7 @@ jobs:
       - name: Check if image already exists
         id: check
         run: |
-          if docker manifest inspect ghcr.io/${{ github.repository_owner }}/outline-ss-server:${{ steps.release.outputs.version }} > /dev/null 2>&1; then
+          if docker manifest inspect ${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }} > /dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version ${{ steps.release.outputs.version }} already in GHCR, skipping build."
           else
@@ -73,6 +77,6 @@ jobs:
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/outline-ss-server:${{ steps.release.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/outline-ss-server:latest
+            ${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }}
+            ${{ steps.image.outputs.base }}:latest
           build-args: VERSION=${{ steps.release.outputs.version }}
