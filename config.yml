@@ -11,9 +11,9 @@ services:
         address: "[::]:9000"
 
     keys:
-      - id: user1  # The key name shown to clients or management tooling.
+      - id: ap  # The key name shown to clients or management tooling.
         cipher: chacha20-ietf-poly1305  # AEAD cipher supported by Outline clients.
         secret: "REPLACE_WITH_USER1_SECRET"  # Generate with: openssl rand -hex 32
-      - id: user2  # A second user sharing the same TCP/UDP transport port.
+      - id: ac  # A second user sharing the same TCP/UDP transport port.
         cipher: chacha20-ietf-poly1305
         secret: "REPLACE_WITH_USER2_SECRET"  # Generate with: openssl rand -hex 32
