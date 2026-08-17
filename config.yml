@@ -1,0 +1,16 @@
+# Outline's YAML configuration for a regular Shadowsocks service.
+# Replace the placeholder secret before starting the container.
+
+services:
+  - listeners:
+      # Accept Shadowsocks TCP connections on the container's port 9000.
+      - type: tcp
+        address: "[::]:9000"
+      # Accept Shadowsocks UDP packets on the same container port.
+      - type: udp
+        address: "[::]:9000"
+
+    keys:
+      - id: user1  # The key name shown to clients or management tooling.
+        cipher: chacha20-ietf-poly1305  # AEAD cipher supported by Outline clients.
+        secret: "REPLACE_WITH_A_RANDOM_SECRET"  # Generate with: openssl rand -hex 32

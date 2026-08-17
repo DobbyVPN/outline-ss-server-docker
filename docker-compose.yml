@@ -1,0 +1,27 @@
+services:
+  outline-ss-server:
+    # Published multi-architecture image built from this repository.
+    image: ghcr.io/dobbyvpn/outline-ss-server:v1.9.2
+    container_name: outline-ss-server
+    restart: unless-stopped
+
+    # The image entrypoint is outline-ss-server; these are its CLI arguments.
+    command:
+      - "-config=/etc/outline/config.yml"
+      - "-replay_history=10000"
+
+    # Mount the Shadowsocks service definition without allowing the container to edit it.
+    volumes:
+      - ./config.yml:/etc/outline/config.yml:ro
+
+    # Expose the same public port for both TCP and UDP Shadowsocks traffic.
+    ports:
+      - "32154:9000/tcp"
+      - "32154:9000/udp"
+
+    # The server only needs to read its config and bind its listening sockets.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
