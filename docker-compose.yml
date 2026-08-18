@@ -3,7 +3,7 @@ services:
     # Published multi-architecture image built from this repository.
     image: ghcr.io/dobbyvpn/outline-ss-server:v1.9.2
     container_name: outline-ss-server
-    restart: unless-stopped
+    restart: always
 
     # The image entrypoint is outline-ss-server; these are its CLI arguments.
     command:
