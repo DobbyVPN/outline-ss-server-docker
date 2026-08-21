@@ -21,5 +21,9 @@ RUN apk add --no-cache curl tar && \
     chmod +x /tmp/outline-ss-server
 
 FROM alpine:3.19
+ARG VERSION VCS_REF
+LABEL org.opencontainers.image.source="https://github.com/DobbyVPN/outline-ss-server-docker" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.version="$VERSION"
 COPY --from=download /tmp/outline-ss-server /outline-ss-server
 ENTRYPOINT ["/outline-ss-server"]

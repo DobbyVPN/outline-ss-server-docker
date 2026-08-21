@@ -22,6 +22,10 @@ jobs:
         id: image
         run: echo "base=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/outline-ss-server" >> "$GITHUB_OUTPUT"
 
+      - name: Set immutable source tag
+        id: source
+        run: printf 'tag=commit-%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
       - name: Get latest tunnel-server release
         id: release
         env:
@@ -50,9 +54,9 @@ jobs:
       - name: Check if image already exists
         id: check
         run: |
-          if docker manifest inspect "${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }}"; then
+          if docker manifest inspect "${{ steps.image.outputs.base }}:${{ steps.source.outputs.tag }}"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Version ${{ steps.release.outputs.version }} already in GHCR, skipping build."
+            echo "Source tag ${{ steps.source.outputs.tag }} already in GHCR, skipping build."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -70,6 +74,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: build
         if: steps.check.outputs.exists == 'false'
         uses: docker/build-push-action@v5
         with:
@@ -79,4 +84,14 @@ jobs:
           tags: |
             ${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }}
             ${{ steps.image.outputs.base }}:latest
-          build-args: VERSION=${{ steps.release.outputs.version }}
+            ${{ steps.image.outputs.base }}:${{ steps.source.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            VCS_REF=${{ github.sha }}
+
+      - name: Record immutable image identity
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          printf 'source_commit=%s\n' "$GITHUB_SHA"
+          printf 'upstream_version=%s\n' "${{ steps.release.outputs.version }}"
+          printf 'image=%s@%s\n' "${{ steps.image.outputs.base }}" "${{ steps.build.outputs.digest }}"
