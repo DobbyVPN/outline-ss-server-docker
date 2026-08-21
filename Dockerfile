@@ -17,7 +17,7 @@ RUN apk add --no-cache curl tar && \
     curl -sSfL "${BASE_URL}/${ARCHIVE}" -o /tmp/archive.tar.gz && \
     EXPECTED=$(grep "  ${ARCHIVE}$" /tmp/checksums.txt | awk '{print $1}') && \
     echo "${EXPECTED}  /tmp/archive.tar.gz" | sha256sum -c - && \
-    tar xzf /tmp/archive.tar.gz -C /tmp/ outline-ss-server && \
+    tar xzof /tmp/archive.tar.gz -C /tmp/ outline-ss-server && \
     chmod +x /tmp/outline-ss-server
 
 FROM alpine:3.19

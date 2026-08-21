@@ -50,7 +50,7 @@ jobs:
       - name: Check if image already exists
         id: check
         run: |
-          if docker manifest inspect ${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }} > /dev/null 2>&1; then
+          if docker manifest inspect "${{ steps.image.outputs.base }}:${{ steps.release.outputs.version }}"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version ${{ steps.release.outputs.version }} already in GHCR, skipping build."
           else
