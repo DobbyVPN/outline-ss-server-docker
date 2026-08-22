@@ -34,7 +34,7 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION=$(curl -sSf \
+            VERSION=$(curl --fail --show-error \
               -H "Authorization: Bearer ${GH_TOKEN}" \
               https://api.github.com/repos/OutlineFoundation/tunnel-server/releases/latest \
               | jq -r '.tag_name')

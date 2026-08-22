@@ -13,8 +13,8 @@ RUN apk add --no-cache curl tar && \
     VER="${VERSION#v}" && \
     BASE_URL="https://github.com/OutlineFoundation/tunnel-server/releases/download/${VERSION}" && \
     ARCHIVE="outline-ss-server_${VER}_linux_${ARCH}.tar.gz" && \
-    curl -sSfL "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt && \
-    curl -sSfL "${BASE_URL}/${ARCHIVE}" -o /tmp/archive.tar.gz && \
+    curl --fail --show-error --location "${BASE_URL}/checksums.txt" -o /tmp/checksums.txt && \
+    curl --fail --show-error --location "${BASE_URL}/${ARCHIVE}" -o /tmp/archive.tar.gz && \
     EXPECTED=$(grep "  ${ARCHIVE}$" /tmp/checksums.txt | awk '{print $1}') && \
     echo "${EXPECTED}  /tmp/archive.tar.gz" | sha256sum -c - && \
     tar xzof /tmp/archive.tar.gz -C /tmp/ outline-ss-server && \
