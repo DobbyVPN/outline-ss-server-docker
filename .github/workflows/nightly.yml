@@ -95,3 +95,32 @@ jobs:
           printf 'source_commit=%s\n' "$GITHUB_SHA"
           printf 'upstream_version=%s\n' "${{ steps.release.outputs.version }}"
           printf 'image=%s@%s\n' "${{ steps.image.outputs.base }}" "${{ steps.build.outputs.digest }}"
+
+      - name: Verify published runtime defaults
+        if: steps.check.outputs.exists == 'false'
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.base }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE_REF"
+          docker image inspect "$IMAGE_REF"
+          python3 - "$IMAGE_REF" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          image = json.loads(subprocess.check_output(
+              ["docker", "image", "inspect", sys.argv[1]],
+              text=True,
+          ))
+          if len(image) != 1:
+              raise SystemExit("published image inspection was not singular")
+          config = image[0].get("Config")
+          if not isinstance(config, dict):
+              raise SystemExit("published image config is missing")
+          if config.get("Entrypoint") != ["/outline-ss-server"]:
+              raise SystemExit("published image entrypoint is incorrect")
+          if config.get("Cmd") != ["-config=/etc/secrets/config.yml"]:
+              raise SystemExit("published image default config command is incorrect")
+          print("published_runtime_defaults=verified")
+          PY

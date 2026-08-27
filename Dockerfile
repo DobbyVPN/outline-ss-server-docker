@@ -27,3 +27,4 @@ LABEL org.opencontainers.image.source="https://github.com/DobbyVPN/outline-ss-se
       org.opencontainers.image.version="$VERSION"
 COPY --from=download /tmp/outline-ss-server /outline-ss-server
 ENTRYPOINT ["/outline-ss-server"]
+CMD ["-config=/etc/secrets/config.yml"]
