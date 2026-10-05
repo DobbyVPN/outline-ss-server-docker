@@ -73,6 +73,29 @@ jobs:
           echo "upstream_commit_date_utc=$date_iso"
           echo "development_tag=$dev_tag"
 
+      - name: Read upstream Go toolchain
+        id: go
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          go_version="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          directives = {}
+          for line in Path('go.mod').read_text().splitlines():
+              fields = line.split()
+              if fields and fields[0] in {'go', 'toolchain'}:
+                  directives[fields[0]] = fields[1]
+          version = directives.get('toolchain', directives.get('go', '')).removeprefix('go')
+          if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
+              raise SystemExit(f'unsupported Go toolchain version: {version!r}')
+          print(version)
+          PY
+          )"
+          echo "version=$go_version" >> "$GITHUB_OUTPUT"
+          echo "upstream_go_version=$go_version"
+
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -97,7 +120,7 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: '1.24.8'
+          go-version: ${{ steps.go.outputs.version }}
           cache-dependency-path: upstream/go.sum
 
       - name: Run upstream build and tests
@@ -123,16 +146,12 @@ jobs:
           push: true
           tags: ${{ steps.image.outputs.base }}:${{ steps.dev.outputs.tag }}
           build-args: |
-            DEV_TAG=${{ steps.dev.outputs.tag }}
+            GO_VERSION=${{ steps.go.outputs.version }}
+            BINARY_VERSION=${{ steps.dev.outputs.tag }}
+            IMAGE_VERSION=${{ steps.dev.outputs.tag }}
             UPSTREAM_SHA=${{ steps.dev.outputs.sha }}
             UPSTREAM_DATE=${{ steps.dev.outputs.date }}
             WRAPPER_SHA=${{ github.sha }}
-
-      - name: Point dev-latest to this upstream commit
-        env:
-          IMAGE_BASE: ${{ steps.image.outputs.base }}
-          DEV_TAG: ${{ steps.dev.outputs.tag }}
-        run: docker buildx imagetools create --tag "$IMAGE_BASE:dev-latest" "$IMAGE_BASE:$DEV_TAG"
 
       - name: Record development image identity
         if: steps.check.outputs.exists == 'false'
@@ -146,6 +165,7 @@ jobs:
         env:
           IMAGE_BASE: ${{ steps.image.outputs.base }}
           DEV_TAG: ${{ steps.dev.outputs.tag }}
+          BINARY_VERSION: ${{ steps.dev.outputs.tag }}
           UPSTREAM_SHA: ${{ steps.dev.outputs.sha }}
           ALREADY_BUILT: ${{ steps.check.outputs.exists }}
           DIGEST: ${{ steps.publish.outputs.digest }}
@@ -184,7 +204,7 @@ jobs:
           PY
 
           binary_version="$(docker run --rm --entrypoint /outline-ss-server "$image_ref" -version)"
-          test "$binary_version" = "$DEV_TAG"
+          test "$binary_version" = "$BINARY_VERSION"
           echo "binary_version=$binary_version"
 
           smoke_name="outline-dev-smoke-${GITHUB_RUN_ID}"

@@ -1,0 +1,312 @@
+name: Outline prerelease tag images
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional exact upstream prerelease tag (for example v1.9.3-rc2)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: outline-ss-server-prerelease-images
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      has_tags: ${{ steps.scan.outputs.has_tags }}
+      tags: ${{ steps.scan.outputs.tags }}
+
+    steps:
+      - name: Set image base
+        id: image
+        run: echo "base=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/outline-ss-server" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find unbuilt upstream prerelease tags
+        id: scan
+        env:
+          IMAGE_BASE: ${{ steps.image.outputs.base }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          upstream = 'https://github.com/OutlineFoundation/tunnel-server.git'
+          result = subprocess.run(
+              ['git', 'ls-remote', '--tags', '--refs', upstream],
+              text=True, capture_output=True, check=True,
+          )
+          tag_names = {
+              line.split('\t', 1)[1].removeprefix('refs/tags/')
+              for line in result.stdout.splitlines() if '\t' in line
+          }
+          stable_pattern = re.compile(r'^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$')
+          prerelease_pattern = re.compile(
+              r'^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-'
+              r'[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$'
+          )
+          stable_versions = []
+          prereleases = []
+          for name in tag_names:
+              stable = stable_pattern.fullmatch(name)
+              prerelease = prerelease_pattern.fullmatch(name)
+              if stable:
+                  stable_versions.append(tuple(map(int, stable.groups())))
+              elif prerelease:
+                  prereleases.append((name, tuple(map(int, prerelease.groups()))))
+          if not stable_versions:
+              raise SystemExit('No stable upstream version tags were found')
+
+          requested = os.environ.get('REQUESTED_TAG', '').strip()
+          if requested:
+              if not requested.startswith('v'):
+                  requested = 'v' + requested
+              if not prerelease_pattern.fullmatch(requested):
+                  raise SystemExit(f'Not a valid upstream prerelease tag: {requested}')
+              if requested not in tag_names:
+                  raise SystemExit(f'Upstream tag does not exist: {requested}')
+              candidates = [requested]
+          else:
+              latest_stable = max(stable_versions)
+              candidates = sorted(
+                  name for name, core in prereleases if core > latest_stable
+              )
+
+          pending = []
+          image_base = os.environ['IMAGE_BASE']
+          for tag in candidates:
+              image = f'{image_base}:{tag}'
+              probe = subprocess.run(
+                  ['docker', 'manifest', 'inspect', image],
+                  text=True, capture_output=True,
+              )
+              if probe.returncode == 0:
+                  print(f'image_already_exists={image}')
+                  continue
+              error = (probe.stdout + probe.stderr).lower()
+              if 'manifest unknown' not in error and 'no such manifest' not in error and 'not found' not in error:
+                  raise SystemExit(f'Could not determine whether {image} exists: {error.strip()}')
+              pending.append(tag)
+
+          for tag in pending:
+              print(f'pending_upstream_tag={tag}')
+          output_tags = pending if pending else ['skip']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"has_tags={str(bool(pending)).lower()}\n")
+              output.write(f'tags={json.dumps(output_tags, separators=(",", ":"))}\n')
+          PY
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.has_tags == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      max-parallel: 1
+      matrix:
+        upstream_tag: ${{ fromJSON(needs.discover.outputs.tags) }}
+
+    steps:
+      - name: Checkout wrapper repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set image base
+        id: image
+        run: echo "base=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/outline-ss-server" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact upstream tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: OutlineFoundation/tunnel-server
+          ref: ${{ matrix.upstream_tag }}
+          path: upstream
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify upstream source and read its toolchain
+        id: source
+        env:
+          UPSTREAM_TAG: ${{ matrix.upstream_tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import os
+          import re
+          import subprocess
+
+          tag = os.environ['UPSTREAM_TAG']
+          head = subprocess.check_output(
+              ['git', '-C', 'upstream', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+          tagged_commit = subprocess.check_output(
+              ['git', '-C', 'upstream', 'rev-parse', f'refs/tags/{tag}^{{commit}}'],
+              text=True,
+          ).strip()
+          if head != tagged_commit:
+              raise SystemExit(f'checkout {head} does not match {tag} target {tagged_commit}')
+          epoch = int(subprocess.check_output(
+              ['git', '-C', 'upstream', 'show', '-s', '--format=%ct', 'HEAD'], text=True
+          ).strip())
+          commit_date = datetime.fromtimestamp(epoch, timezone.utc).strftime('%F')
+
+          directives = {}
+          for line in Path('upstream/go.mod').read_text().splitlines():
+              fields = line.split()
+              if fields and fields[0] in {'go', 'toolchain'}:
+                  directives[fields[0]] = fields[1]
+          go_version = directives.get('toolchain', directives.get('go', '')).removeprefix('go')
+          if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', go_version):
+              raise SystemExit(f'unsupported Go toolchain version: {go_version!r}')
+          binary_version = tag.removeprefix('v')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'sha={head}\n')
+              output.write(f'date={commit_date}\n')
+              output.write(f'go_version={go_version}\n')
+              output.write(f'binary_version={binary_version}\n')
+          print(f'upstream_tag={tag}')
+          print(f'upstream_commit={head}')
+          print(f'upstream_commit_date_utc={commit_date}')
+          print(f'upstream_go_version={go_version}')
+          PY
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ steps.source.outputs.go_version }}
+          cache-dependency-path: upstream/go.sum
+
+      - name: Run upstream build and tests
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive
+          go build -v ./...
+          go test -race -benchmem -bench=. ./... -benchtime=100ms
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build and publish named prerelease image
+        id: publish
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile.dev
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+          push: true
+          tags: ${{ steps.image.outputs.base }}:${{ matrix.upstream_tag }}
+          build-args: |
+            GO_VERSION=${{ steps.source.outputs.go_version }}
+            BINARY_VERSION=${{ steps.source.outputs.binary_version }}
+            IMAGE_VERSION=${{ matrix.upstream_tag }}
+            UPSTREAM_SHA=${{ steps.source.outputs.sha }}
+            UPSTREAM_DATE=${{ steps.source.outputs.date }}
+            WRAPPER_SHA=${{ github.sha }}
+
+      - name: Record prerelease image identity
+        run: |
+          printf 'upstream_tag=%s\n' "${{ matrix.upstream_tag }}"
+          printf 'upstream_commit=%s\n' "${{ steps.source.outputs.sha }}"
+          printf 'upstream_commit_date_utc=%s\n' "${{ steps.source.outputs.date }}"
+          printf 'image=%s:%s@%s\n' "${{ steps.image.outputs.base }}" "${{ matrix.upstream_tag }}" "${{ steps.publish.outputs.digest }}"
+
+      - name: Verify image defaults and configured listener startup
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.base }}@${{ steps.publish.outputs.digest }}
+          IMAGE_TAG: ${{ matrix.upstream_tag }}
+          BINARY_VERSION: ${{ steps.source.outputs.binary_version }}
+          UPSTREAM_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE_REF"
+          python3 - "$IMAGE_REF" "$IMAGE_TAG" "$UPSTREAM_SHA" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          image_ref, image_tag, upstream_sha = sys.argv[1:]
+          images = json.loads(subprocess.check_output(
+              ['docker', 'image', 'inspect', image_ref], text=True
+          ))
+          if len(images) != 1:
+              raise SystemExit('published image inspection was not singular')
+          config = images[0].get('Config') or {}
+          if config.get('Entrypoint') != ['/outline-ss-server']:
+              raise SystemExit('published image entrypoint is incorrect')
+          if config.get('Cmd') != ['-config=/etc/secrets/config.yml']:
+              raise SystemExit('published image default config command is incorrect')
+          labels = config.get('Labels') or {}
+          if labels.get('org.opencontainers.image.version') != image_tag:
+              raise SystemExit('published image version label does not match its upstream tag')
+          if labels.get('com.dobbyvpn.outline.upstream-revision') != upstream_sha:
+              raise SystemExit('published image upstream revision label is incorrect')
+          print('published_image_labels_and_defaults=verified')
+          PY
+
+          binary_version="$(docker run --rm --entrypoint /outline-ss-server "$IMAGE_REF" -version)"
+          test "$binary_version" = "$BINARY_VERSION"
+          echo "binary_version=$binary_version"
+
+          smoke_name="outline-prerelease-smoke-${GITHUB_RUN_ID}-${{ strategy.job-index }}"
+          smoke_config="$GITHUB_WORKSPACE/upstream/cmd/outline-ss-server/config_example.yml"
+          trap 'docker rm -f "$smoke_name" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$smoke_name" \
+            --mount "type=bind,src=$smoke_config,dst=/etc/secrets/config.yml,readonly" \
+            "$IMAGE_REF"
+
+          ready=false
+          for attempt in $(seq 1 15); do
+            running="$(docker inspect --format='{{.State.Running}}' "$smoke_name" 2>/dev/null || echo false)"
+            if [ "$running" != true ]; then
+              docker logs "$smoke_name" || true
+              echo "prerelease image exited before starting configured listeners" >&2
+              exit 1
+            fi
+            logs="$(docker logs "$smoke_name" 2>&1 || true)"
+            if grep -Fq 'Web server started.' <<< "$logs" && \
+               grep -Fq 'TCP service started.' <<< "$logs" && \
+               grep -Fq 'UDP service started.' <<< "$logs"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          docker logs "$smoke_name"
+          if [ "$ready" != true ]; then
+            echo "prerelease image did not report all configured listeners started" >&2
+            exit 1
+          fi
+          echo "configured_listener_startup=verified"
