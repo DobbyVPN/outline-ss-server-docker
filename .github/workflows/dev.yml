@@ -1,0 +1,219 @@
+name: Nightly Outline development image
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: outline-ss-server-development-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout wrapper repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set image base
+        id: image
+        run: echo "base=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/outline-ss-server" >> "$GITHUB_OUTPUT"
+
+      - name: Read latest upstream master commit
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git ls-remote --exit-code https://github.com/OutlineFoundation/tunnel-server.git refs/heads/master | cut -f1)"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve upstream master to a commit SHA" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact upstream commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: OutlineFoundation/tunnel-server
+          ref: ${{ steps.upstream.outputs.sha }}
+          path: upstream
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify source and derive development tag
+        id: dev
+        env:
+          EXPECTED_SHA: ${{ steps.upstream.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C upstream rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          epoch="$(git -C upstream show -s --format=%ct HEAD)"
+          date_tag="$(LC_ALL=C date -u -d "@$epoch" '+%y%b%d')"
+          date_iso="$(LC_ALL=C date -u -d "@$epoch" '+%F')"
+          short_sha="$(git -C upstream rev-parse --short=12 HEAD)"
+          dev_tag="dev-${date_tag}-${short_sha}"
+          {
+            echo "sha=$actual_sha"
+            echo "date=$date_tag"
+            echo "date_iso=$date_iso"
+            echo "tag=$dev_tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=$actual_sha"
+          echo "upstream_commit_date_utc=$date_iso"
+          echo "development_tag=$dev_tag"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether this development image already exists
+        id: check
+        env:
+          IMAGE_BASE: ${{ steps.image.outputs.base }}
+          DEV_TAG: ${{ steps.dev.outputs.tag }}
+        run: |
+          if docker manifest inspect "$IMAGE_BASE:$DEV_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Development image $IMAGE_BASE:$DEV_TAG already exists; skipping rebuild."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.24.8'
+          cache-dependency-path: upstream/go.sum
+
+      - name: Run upstream build and tests
+        if: steps.check.outputs.exists == 'false'
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive
+          go build -v ./...
+          go test -race -benchmem -bench=. ./... -benchtime=100ms
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build and publish development image
+        id: publish
+        if: steps.check.outputs.exists == 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile.dev
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+          push: true
+          tags: ${{ steps.image.outputs.base }}:${{ steps.dev.outputs.tag }}
+          build-args: |
+            DEV_TAG=${{ steps.dev.outputs.tag }}
+            UPSTREAM_SHA=${{ steps.dev.outputs.sha }}
+            UPSTREAM_DATE=${{ steps.dev.outputs.date }}
+            WRAPPER_SHA=${{ github.sha }}
+
+      - name: Point dev-latest to this upstream commit
+        env:
+          IMAGE_BASE: ${{ steps.image.outputs.base }}
+          DEV_TAG: ${{ steps.dev.outputs.tag }}
+        run: docker buildx imagetools create --tag "$IMAGE_BASE:dev-latest" "$IMAGE_BASE:$DEV_TAG"
+
+      - name: Record development image identity
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          printf 'upstream_commit=%s\n' "${{ steps.dev.outputs.sha }}"
+          printf 'upstream_commit_date_utc=%s\n' "${{ steps.dev.outputs.date_iso }}"
+          printf 'development_tag=%s\n' "${{ steps.dev.outputs.tag }}"
+          printf 'image=%s@%s\n' "${{ steps.image.outputs.base }}" "${{ steps.publish.outputs.digest }}"
+
+      - name: Verify image defaults and startup
+        env:
+          IMAGE_BASE: ${{ steps.image.outputs.base }}
+          DEV_TAG: ${{ steps.dev.outputs.tag }}
+          UPSTREAM_SHA: ${{ steps.dev.outputs.sha }}
+          ALREADY_BUILT: ${{ steps.check.outputs.exists }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$ALREADY_BUILT" = true ]; then
+            image_ref="$IMAGE_BASE:$DEV_TAG"
+          else
+            image_ref="$IMAGE_BASE@$DIGEST"
+          fi
+          docker pull --platform linux/amd64 "$image_ref"
+          docker image inspect "$image_ref"
+          python3 - "$image_ref" "$DEV_TAG" "$UPSTREAM_SHA" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          image_ref, dev_tag, upstream_sha = sys.argv[1:]
+          image = json.loads(subprocess.check_output(
+              ["docker", "image", "inspect", image_ref], text=True
+          ))
+          if len(image) != 1:
+              raise SystemExit("published image inspection was not singular")
+          config = image[0].get("Config") or {}
+          if config.get("Entrypoint") != ["/outline-ss-server"]:
+              raise SystemExit("published image entrypoint is incorrect")
+          if config.get("Cmd") != ["-config=/etc/secrets/config.yml"]:
+              raise SystemExit("published image default config command is incorrect")
+          labels = config.get("Labels") or {}
+          if labels.get("org.opencontainers.image.version") != dev_tag:
+              raise SystemExit("published image version label does not match its dev tag")
+          if labels.get("com.dobbyvpn.outline.upstream-revision") != upstream_sha:
+              raise SystemExit("published image upstream revision label is incorrect")
+          print("published_image_labels_and_defaults=verified")
+          PY
+
+          binary_version="$(docker run --rm --entrypoint /outline-ss-server "$image_ref" -version)"
+          test "$binary_version" = "$DEV_TAG"
+          echo "binary_version=$binary_version"
+
+          smoke_name="outline-dev-smoke-${GITHUB_RUN_ID}"
+          smoke_config="$GITHUB_WORKSPACE/upstream/cmd/outline-ss-server/config_example.yml"
+          trap 'docker rm -f "$smoke_name" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$smoke_name" \
+            --mount "type=bind,src=$smoke_config,dst=/etc/secrets/config.yml,readonly" \
+            "$image_ref"
+
+          ready=false
+          for attempt in $(seq 1 15); do
+            running="$(docker inspect --format='{{.State.Running}}' "$smoke_name" 2>/dev/null || echo false)"
+            if [ "$running" != true ]; then
+              docker logs "$smoke_name" || true
+              echo "development image exited before starting its configured listeners" >&2
+              exit 1
+            fi
+            logs="$(docker logs "$smoke_name" 2>&1 || true)"
+            if grep -Fq 'Web server started.' <<< "$logs" && \
+               grep -Fq 'TCP service started.' <<< "$logs" && \
+               grep -Fq 'UDP service started.' <<< "$logs"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          docker logs "$smoke_name"
+          if [ "$ready" != true ]; then
+            echo "development image did not report all configured listeners started" >&2
+            exit 1
+          fi
+          echo "configured_listener_startup=verified"
