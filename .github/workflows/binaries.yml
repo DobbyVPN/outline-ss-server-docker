@@ -209,7 +209,7 @@ jobs:
             echo "source_date=$source_date"
             echo "version=$version"
             echo "go_version=$go_version"
-            echo "archive=outline-ss-server_$version_linux_x86_64.tar.gz"
+            echo "archive=outline-ss-server_${version}_linux_x86_64.tar.gz"
             echo "method=$method"
             echo "latest=$LATEST_STABLE"
           } >> "$GITHUB_OUTPUT"
