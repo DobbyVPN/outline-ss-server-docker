@@ -227,6 +227,7 @@ jobs:
           VERSION: ${{ steps.source.outputs.version }}
           ARCHIVE: ${{ steps.source.outputs.archive }}
           METHOD: ${{ steps.source.outputs.method }}
+          LATEST: ${{ steps.source.outputs.latest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -304,6 +305,9 @@ jobs:
             echo "release_id=$release_id"
             echo "draft=false"
           } >> "$GITHUB_OUTPUT"
+          if [ "$CHANNEL" = stable ] && [ "$LATEST" = true ]; then
+            test "$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$RELEASE_TAG"
+          fi
           echo "Existing release is valid and matches upstream source."
 
       - name: Set up Go
@@ -544,6 +548,6 @@ jobs:
                 .build.upstream_release_asset_sha256 == .archive.sha256
               else true end)' "$dir/build-info.json" >/dev/null
           if [ "$CHANNEL" = stable ] && [ "$LATEST" = true ]; then
-            test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isLatest --jq .isLatest)" = true
+            test "$(gh api "/repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$RELEASE_TAG"
           fi
           echo "published_release_assets=verified"
