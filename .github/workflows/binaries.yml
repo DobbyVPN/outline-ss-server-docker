@@ -246,6 +246,7 @@ jobs:
             cat "$error" >&2
             exit 1
           fi
+          release_id="$(jq -r '.id' "$response")"
           draft="$(jq -r '.draft' "$response")"
           pre=false
           if [ "$CHANNEL" != stable ]; then pre=true; fi
