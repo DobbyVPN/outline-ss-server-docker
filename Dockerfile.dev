@@ -23,7 +23,7 @@ FROM alpine:3.19
 
 ARG IMAGE_VERSION WRAPPER_SHA UPSTREAM_SHA UPSTREAM_DATE
 
-LABEL org.opencontainers.image.source="https://github.com/DobbyVPN/outline-ss-server-docker" \
+LABEL org.opencontainers.image.source="https://github.com/DobbyVPN/outline-tunnel-server" \
       org.opencontainers.image.revision="$WRAPPER_SHA" \
       org.opencontainers.image.version="$IMAGE_VERSION" \
       com.dobbyvpn.outline.upstream-source="https://github.com/OutlineFoundation/tunnel-server" \

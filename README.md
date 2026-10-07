@@ -1,4 +1,4 @@
-# outline-ss-server-docker
+# outline-tunnel-server
 
 Docker build for `outline-ss-server`.
 
