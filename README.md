@@ -99,6 +99,18 @@ that the official GitHub latest release and
 The workflow stops after release and image publication; it does not deploy or
 restart a running service.
 
+The separate **Recover verified Outline Caddy publication** workflow is a
+one-time recovery for the already verified producer run `37661966790` at
+wrapper commit `b7ecd468a6a82a63c1a65a416e8d2f0a1e184896`. Dispatch it from
+`main` only after reviewing the pinned recovery lock. It downloads that run's
+artifact, verifies its producer job, artifact digest, source tag, binary,
+archive, OCI preview, module origins, and four published image platforms; it
+does not rebuild the image or overwrite the immutable version tag. It records
+the original producer and recovery publisher identities in final provenance,
+then completes the prerelease and `latest-dbby` alias only if the locked
+official latest release and server image still match their recorded values.
+It also stops before deployment or service restart.
+
 The locked build uses Go 1.26.8, Caddy v2.11.7, and the exact module and base
 image revisions in the lock file. Local source regression review requires Go
 1.26.8. The full workflow uses Docker Buildx v0.37.2 and QEMU for cross-platform
@@ -111,7 +123,7 @@ Run the release-helper state-machine tests and shell syntax checks locally:
 ```sh
 python3 -m unittest discover -s tests -v
 for script in scripts/*.sh; do bash -n "$script"; done
-actionlint .github/workflows/caddy-dbby.yml
+actionlint .github/workflows/caddy-dbby.yml .github/workflows/recover-caddy-dbby-publication.yml
 ```
 
 The source regression command used by CI is run from the checked-out source
