@@ -491,6 +491,7 @@ jobs:
           print(f"preview_oci_index={info['image']['preview_oci_index_digest']}")
           PY
           (cd out && sha256sum -c checksums.txt)
+          chmod 0755 out/caddy
           archive="$(cat out/archive-name.txt)"
           mkdir -p out/extracted
           tar -xzf "out/$archive" -C out/extracted
