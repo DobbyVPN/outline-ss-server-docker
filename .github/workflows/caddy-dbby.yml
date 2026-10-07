@@ -698,33 +698,31 @@ jobs:
             image_ref="$IMAGE_REPOSITORY@$image_digest"
           fi
 
-          python3 - "$remote_index" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          platforms = {
-              (m.get("platform", {}).get("os"), m.get("platform", {}).get("architecture"),
-               m.get("platform", {}).get("variant", ""))
-              for m in index.get("manifests", [])
-          }
-          expected = {("linux", "amd64", ""), ("linux", "arm64", ""),
-                      ("linux", "arm", "v7"), ("linux", "arm", "v6")}
-          if platforms != expected:
-              raise SystemExit(f"published index platforms {sorted(platforms)!r} != {sorted(expected)!r}")
-          PY
+          platform_manifest_file=out/logs/platform-manifests.tsv
+          python3 scripts/verify-caddy-dbby-image-index.py \
+            --index "$remote_index" \
+            --expected-index-digest "$image_digest" \
+            --output "$platform_manifest_file" \
+            2>&1 | tee out/logs/verify-image-index.log
 
+          amd64_image_ref=
           for spec in 'amd64 linux/amd64' 'arm64 linux/arm64' 'armv7 linux/arm/v7' 'armv6 linux/arm/v6'; do
             read -r arch platform <<<"$spec"
-            docker pull --platform "$platform" "$image_ref" 2>&1 | tee "out/logs/pull-$arch.log"
-            revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_ref")"
-            version="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image_ref")"
-            wrapper_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.wrapper-revision" }}' "$image_ref")"
-            caddy_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-version" }}' "$image_ref")"
-            caddy_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-revision" }}' "$image_ref")"
-            server_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-version" }}' "$image_ref")"
-            server_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-revision" }}' "$image_ref")"
-            go_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.go-version" }}' "$image_ref")"
+            child_digest="$(awk -F '\t' -v wanted="$platform" '$1 == wanted { print $2 }' "$platform_manifest_file")"
+            if [[ ! "$child_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "$platform has no unique validated child image digest" >&2
+              exit 1
+            fi
+            child_ref="$IMAGE_REPOSITORY@$child_digest"
+            docker pull --platform "$platform" "$child_ref" 2>&1 | tee "out/logs/pull-$arch.log"
+            revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$child_ref")"
+            version="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$child_ref")"
+            wrapper_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.wrapper-revision" }}' "$child_ref")"
+            caddy_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-version" }}' "$child_ref")"
+            caddy_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-revision" }}' "$child_ref")"
+            server_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-version" }}' "$child_ref")"
+            server_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-revision" }}' "$child_ref")"
+            go_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.go-version" }}' "$child_ref")"
             if [[ "$revision" != "$SOURCE_SHA" || "$version" != "$BINARY_VERSION" || \
               "$wrapper_revision" != "$WRAPPER_SHA" || "$caddy_version" != "$CADDY_VERSION" || \
               "$caddy_revision" != "$CADDY_SHA" || "$server_version" != "$OUTLINE_SERVER_VERSION" || \
@@ -733,11 +731,18 @@ jobs:
               exit 1
             fi
             CADDY_UPSTREAM_VERSION="$CADDY_VERSION" \
-              scripts/verify-caddy-dbby-image.sh "$image_ref" "$platform" "$BINARY_VERSION" \
+              scripts/verify-caddy-dbby-image.sh "$child_ref" "$platform" "$BINARY_VERSION" \
               2>&1 | tee "out/logs/verify-published-$arch.log"
+            if [[ "$arch" == amd64 ]]; then
+              amd64_image_ref=$child_ref
+            fi
           done
 
-          container="$(docker create --platform linux/amd64 "$image_ref")"
+          if [[ -z "$amd64_image_ref" ]]; then
+            echo "validated index did not provide an amd64 child image reference" >&2
+            exit 1
+          fi
+          container="$(docker create --platform linux/amd64 "$amd64_image_ref")"
           trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
           docker cp "$container:/usr/bin/caddy" out/caddy-from-published-image
           docker rm "$container" >/dev/null
