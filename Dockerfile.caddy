@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1.7
+ARG GO_IMAGE=golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
+ARG RUNTIME_IMAGE=caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+ARG SOURCE_DATE_EPOCH
+ARG WRAPPER_REPOSITORY
+ARG CADDY_MODULE_ORIGIN
+
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS build
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG GO_VERSION=1.26.8
+ARG CADDY_VERSION=v2.11.7
+ARG OUTLINE_SERVER_VERSION=v1.9.3-rc2
+ARG BINARY_VERSION=v2.11.7-dbby
+ARG SOURCE_DATE_EPOCH
+
+WORKDIR /build
+COPY scripts/build-caddy-dbby.sh /usr/local/bin/build-caddy-dbby
+COPY source/ /src/
+RUN chmod 0755 /usr/local/bin/build-caddy-dbby && \
+    EXPECTED_GO_VERSION="$GO_VERSION" \
+    EXPECTED_CADDY_VERSION="$CADDY_VERSION" \
+    EXPECTED_OUTLINE_SERVER_VERSION="$OUTLINE_SERVER_VERSION" \
+    BINARY_VERSION="$BINARY_VERSION" \
+    /usr/local/bin/build-caddy-dbby \
+      --source-dir /src \
+      --output /out/caddy \
+      --arch "$TARGETARCH" \
+      --variant "${TARGETVARIANT:-}"
+
+FROM scratch AS caddy-binary
+COPY --from=build /out/caddy /caddy
+
+FROM ${RUNTIME_IMAGE} AS runtime
+ARG SOURCE_REPOSITORY=DobbyVPN/outliner-tunnel-server-fork
+ARG SOURCE_TAG=outlinecaddy/v0.0.2-dbby
+ARG SOURCE_SHA
+ARG SOURCE_DATE
+ARG UPSTREAM_BASE_SHA=2e9909e67173be0275d25a381cc5555e0e56d9af
+ARG OUTLINE_SERVER_VERSION=v1.9.3-rc2
+ARG OUTLINE_SERVER_SHA=d019cea7add912de4be2cb1a6a0aa8e4c56c1077
+ARG OUTLINE_SERVER_MODULE_ORIGIN=https://github.com/Jigsaw-Code/outline-ss-server
+ARG CADDY_VERSION=v2.11.7
+ARG CADDY_SHA=72dd0fb067f6d7826c7f79907670ba4a713bfe37
+ARG CADDY_MODULE_ORIGIN=https://github.com/caddyserver/caddy
+ARG GO_VERSION=1.26.8
+ARG GO_IMAGE=golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c
+ARG RUNTIME_IMAGE=caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
+ARG WRAPPER_REPOSITORY
+ARG WRAPPER_SHA
+ARG BUILD_SCRIPT_SHA
+ARG IMAGE_VERSION=v2.11.7-dbby
+ARG SOURCE_DATE_EPOCH
+
+LABEL org.opencontainers.image.source="https://github.com/${SOURCE_REPOSITORY}" \
+      org.opencontainers.image.revision="${SOURCE_SHA}" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.created="${SOURCE_DATE}" \
+      com.dobbyvpn.outline-caddy.source-tag="${SOURCE_TAG}" \
+      com.dobbyvpn.outline-caddy.upstream-base-revision="${UPSTREAM_BASE_SHA}" \
+      com.dobbyvpn.outline-caddy.outline-server-version="${OUTLINE_SERVER_VERSION}" \
+      com.dobbyvpn.outline-caddy.outline-server-revision="${OUTLINE_SERVER_SHA}" \
+      com.dobbyvpn.outline-caddy.outline-server-module-origin="${OUTLINE_SERVER_MODULE_ORIGIN}" \
+      com.dobbyvpn.outline-caddy.caddy-version="${CADDY_VERSION}" \
+      com.dobbyvpn.outline-caddy.caddy-revision="${CADDY_SHA}" \
+      com.dobbyvpn.outline-caddy.caddy-module-origin="${CADDY_MODULE_ORIGIN}" \
+      com.dobbyvpn.outline-caddy.go-version="${GO_VERSION}" \
+      com.dobbyvpn.outline-caddy.go-builder-image="${GO_IMAGE}" \
+      com.dobbyvpn.outline-caddy.runtime-image="${RUNTIME_IMAGE}" \
+      com.dobbyvpn.outline-caddy.wrapper-repository="${WRAPPER_REPOSITORY}" \
+      com.dobbyvpn.outline-caddy.wrapper-revision="${WRAPPER_SHA}" \
+      com.dobbyvpn.outline-caddy.build-script-sha256="${BUILD_SCRIPT_SHA}"
+
+COPY --from=build /out/caddy /usr/bin/caddy
+ENV XDG_CONFIG_HOME=/config \
+    XDG_DATA_HOME=/data
+VOLUME ["/config", "/data"]
+WORKDIR /etc/caddy
+ENTRYPOINT ["caddy"]
+CMD ["run", "--config", "/etc/caddy/config.json"]

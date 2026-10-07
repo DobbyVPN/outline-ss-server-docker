@@ -73,3 +73,66 @@ Published assets are never replaced: reruns validate an existing release and sto
 release. The fork has its own `latest-dbby` alias. The development and prerelease
 workflows publish named tags only. Publishing an image does not update running
 servers.
+
+## Outline Caddy packet WebSocket builds
+
+The manually dispatched **Manually reviewed Outline Caddy build** workflow builds
+the Outline Caddy packet-WebSocket plugin from the exact source tag and pinned
+Caddy, Go, Outline server, and container-image revisions in
+[`caddy-dbby.lock.json`](caddy-dbby.lock.json). The published Caddy binary and
+image use the separate `v2.11.7-dbby` identity; this workflow does not replace
+the Outline server image or deploy to a running host.
+
+The workflow input `source_tag` must match the locked tag. `publish` defaults to
+`false`: that run builds and verifies the amd64 binary, smoke-checks the four
+supported image platforms, and uploads a review artifact with the archive,
+checksums, build provenance, OCI image archive, and test logs. After reviewing
+that artifact, dispatch the same locked source tag with `publish=true` to
+publish the immutable GitHub prerelease `caddy-v2.11.7-dbby` and GHCR image
+`ghcr.io/dobbyvpn/outline-caddy:v2.11.7-dbby` for Linux amd64, arm64, arm/v7,
+and arm/v6. The release contains
+`caddy_2.11.7-dbby_linux_amd64.tar.gz`, `checksums.txt`, and `build-info.json`.
+GitHub receives `make_latest=false`; publication downloads and verifies the
+release assets before moving only the `latest-dbby` image alias, then checks
+that the official GitHub latest release and GHCR `latest` image did not change.
+The workflow stops after release and image publication; it does not deploy or
+restart a running service.
+
+The locked build uses Go 1.26.8, Caddy v2.11.7, and the exact module and base
+image revisions in the lock file. Local source regression review requires Go
+1.26.8. The full workflow uses Docker Buildx v0.37.2 and QEMU for cross-platform
+image checks; its runner also needs Python 3, Bash, OpenSSL, curl, readelf, GNU
+tar/gzip, and sha256sum. Registry and GitHub credentials are only used by the
+publish job.
+
+Run the release-helper state-machine tests and shell syntax checks locally:
+
+```sh
+python3 -m unittest discover -s tests -v
+for script in scripts/*.sh; do bash -n "$script"; done
+actionlint .github/workflows/caddy-dbby.yml
+```
+
+The source regression command used by CI is run from the checked-out source
+module:
+
+```sh
+cd source/outlinecaddy
+GOWORK=off GOTOOLCHAIN=local bash ./scripts/review.sh
+```
+
+Use the manual workflow's `publish=false` dispatch for a review artifact, then
+dispatch the same source tag with `publish=true` only after reviewing it.
+
+To verify a downloaded binary archive, extract it and run:
+
+```sh
+sha256sum --check checksums.txt
+./caddy version
+```
+
+To use the multi-platform image:
+
+```sh
+docker pull ghcr.io/dobbyvpn/outline-caddy:v2.11.7-dbby
+```
