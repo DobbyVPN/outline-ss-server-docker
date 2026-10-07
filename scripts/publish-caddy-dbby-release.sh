@@ -286,6 +286,33 @@ else
     cat out/logs/release-lookup.err >&2
     exit "$status"
   fi
+  # GitHub's release-by-tag endpoint omits drafts. Find a matching draft in
+  # the complete release list so a partial publication can resume safely.
+  gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+    >out/logs/release-list.json
+  draft_id=$(python3 - out/logs/release-list.json "$RELEASE_TAG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+pages = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+    raise SystemExit("release list is not an array of paginated release arrays")
+matches = [release for page in pages for release in page
+           if isinstance(release, dict) and release.get("tag_name") == sys.argv[2]]
+if len(matches) > 1:
+    raise SystemExit("multiple releases have the pinned tag; refusing ambiguous publication")
+if matches:
+    release = matches[0]
+    if release.get("draft") is not True or type(release.get("id")) is not int or release["id"] <= 0:
+        raise SystemExit("release-by-tag lookup failed but matching list entry is not a valid draft")
+    print(release["id"])
+PY
+  )
+  if [[ -n "$draft_id" ]]; then
+    gh api "/repos/$GITHUB_REPOSITORY/releases/$draft_id" >"$release_json"
+    exists=true
+  fi
 fi
 
 if [[ "$exists" == false ]]; then
@@ -351,7 +378,7 @@ if ((${#missing[@]})); then
   gh release upload "$RELEASE_TAG" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
 fi
 
-gh api "$release_api" >"$release_json"
+gh api "/repos/$GITHUB_REPOSITORY/releases/$release_id" >"$release_json"
 validate_release "$release_json" draft
 mapfile -t uploaded_names < <(asset_names "$release_json")
 if [[ "${#uploaded_names[@]}" -ne "${#expected_assets[@]}" ]]; then
