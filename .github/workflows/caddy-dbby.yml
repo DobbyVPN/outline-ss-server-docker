@@ -631,8 +631,8 @@ jobs:
           fi
           if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
             >out/logs/official-latest-image-before.json 2>out/logs/official-latest-image-before.err; then
-            official_image="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
-              | awk '$1 == "Digest:" { print $2; exit }')"
+            official_image="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' \
+              "$OFFICIAL_LATEST_IMAGE_REFERENCE")"
             if [[ ! "$official_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "official latest image did not resolve to a full digest" >&2
               exit 1
@@ -660,7 +660,7 @@ jobs:
           remote_index=out/logs/remote-index.json
           if docker buildx imagetools inspect --raw "$image_tag" >"$remote_index" 2>out/logs/image-inspect.err; then
             echo "immutable image tag already exists; verifying it without overwriting"
-            image_digest="$(docker buildx imagetools inspect "$image_tag" | awk '$1 == "Digest:" { print $2; exit }')"
+            image_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$image_tag")"
             if [[ ! "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "registry did not return a full immutable image digest" >&2
               exit 1
@@ -690,7 +690,7 @@ jobs:
           PY
           )"
             docker buildx imagetools inspect --raw "$image_tag" >"$remote_index"
-            remote_digest="$(docker buildx imagetools inspect "$image_tag" | awk '$1 == "Digest:" { print $2; exit }')"
+            remote_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$image_tag")"
             if [[ "$remote_digest" != "$image_digest" ]]; then
               echo "registry image index $remote_digest differs from Buildx digest $image_digest" >&2
               exit 1
@@ -845,7 +845,7 @@ jobs:
           if platforms != expected:
               raise SystemExit(f"Dobby alias platforms {sorted(platforms)!r} != {sorted(expected)!r}")
           PY
-          alias_digest="$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG" | awk '$1 == "Digest:" { print $2; exit }')"
+          alias_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG")"
           if [[ ! "$alias_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Dobby alias did not resolve to a full image digest" >&2
             exit 1
@@ -870,8 +870,8 @@ jobs:
           fi
           if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
             >out/logs/official-latest-image-after.json 2>out/logs/official-latest-image-after.err; then
-            official_image_after="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
-              | awk '$1 == "Digest:" { print $2; exit }')"
+            official_image_after="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' \
+              "$OFFICIAL_LATEST_IMAGE_REFERENCE")"
           elif grep -Eiq 'not found|manifest unknown|no such manifest' out/logs/official-latest-image-after.err; then
             official_image_after=absent
           else
