@@ -1,0 +1,917 @@
+name: Manually reviewed Outline Caddy build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Exact Outline Caddy source tag from caddy-dbby.lock.json
+        required: true
+        type: string
+        default: outlinecaddy/v0.0.2-dbby
+      publish:
+        description: Publish the verified prerelease and immutable image after artifact review
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: outline-caddy-dbby-v2.11.7
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify source and build review artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    outputs:
+      source_sha: ${{ steps.recipe.outputs.source_sha }}
+      source_tag: ${{ steps.recipe.outputs.source_tag }}
+    steps:
+      - name: Checkout build recipe
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate locked release recipe
+        id: recipe
+        env:
+          REQUESTED_SOURCE_TAG: ${{ inputs.source_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          lock = json.loads(Path("caddy-dbby.lock.json").read_text(encoding="utf-8"))
+          source = lock["source"]
+          caddy = lock["caddy"]
+          go = lock["go"]
+          release = lock["release"]
+          requested = os.environ["REQUESTED_SOURCE_TAG"].strip()
+          if requested != source["tag"]:
+              raise SystemExit(
+                  f"source_tag must exactly match the pinned tag {source['tag']!r}"
+              )
+          if not re.fullmatch(r"[0-9a-f]{40}", source["commit"]):
+              raise SystemExit(
+                  "caddy-dbby.lock.json still has no full source commit SHA; "
+                  "replace PENDING_ROOT_FINAL_SOURCE_SHA before running this workflow"
+              )
+          expected = {
+              "schema_version": 1,
+              "source_repository": "DobbyVPN/outliner-tunnel-server-fork",
+              "base_commit": "2e9909e67173be0275d25a381cc5555e0e56d9af",
+              "server_module": "golang.getoutline.org/tunnel-server",
+              "server_module_origin": "https://github.com/Jigsaw-Code/outline-ss-server",
+          "server_version": "v1.9.3-rc2",
+          "server_commit": "d019cea7add912de4be2cb1a6a0aa8e4c56c1077",
+          "caddy_version": "v2.11.7",
+              "caddy_commit": "72dd0fb067f6d7826c7f79907670ba4a713bfe37",
+              "caddy_module_origin": "https://github.com/caddyserver/caddy",
+          "runtime_image": "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f",
+          "go_version": "1.26.8",
+          "builder_image": "golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c",
+              "binary_version": "v2.11.7-dbby",
+              "release_tag": "caddy-v2.11.7-dbby",
+              "image_repository": "ghcr.io/dobbyvpn/outline-caddy",
+              "image_tag": "v2.11.7-dbby",
+              "moving_image_tag": "latest-dbby",
+          }
+          actual = {
+              "schema_version": lock["schema_version"],
+              "source_repository": source["repository"],
+              "base_commit": source["upstream_base_commit"],
+              "server_module": source["outline_server_module"],
+              "server_module_origin": source["outline_server_module_origin"],
+              "server_version": source["outline_server_version"],
+              "server_commit": source["outline_server_commit"],
+              "caddy_version": caddy["version"],
+              "caddy_commit": caddy["commit"],
+              "caddy_module_origin": caddy["module_origin"],
+              "runtime_image": caddy["runtime_image"],
+              "go_version": go["version"],
+              "builder_image": go["builder_image"],
+              "binary_version": release["binary_version"],
+              "release_tag": release["release_tag"],
+              "image_repository": release["image_repository"],
+              "image_tag": release["image_tag"],
+              "moving_image_tag": release["moving_image_tag"],
+          }
+          if actual != expected:
+              raise SystemExit(f"release lock does not match reviewed pins: {actual!r}")
+          environment = {
+              "SOURCE_REPOSITORY": source["repository"],
+              "SOURCE_TAG": source["tag"],
+              "SOURCE_SHA": source["commit"],
+              "UPSTREAM_BASE_REPOSITORY": source["upstream_base_repository"],
+              "UPSTREAM_BASE_SHA": source["upstream_base_commit"],
+              "OUTLINE_SERVER_MODULE": source["outline_server_module"],
+              "OUTLINE_SERVER_MODULE_ORIGIN": source["outline_server_module_origin"],
+              "OUTLINE_SERVER_VERSION": source["outline_server_version"],
+              "OUTLINE_SERVER_SHA": source["outline_server_commit"],
+              "CADDY_VERSION": caddy["version"],
+              "CADDY_SHA": caddy["commit"],
+              "CADDY_MODULE_ORIGIN": caddy["module_origin"],
+              "CADDY_RUNTIME_IMAGE": caddy["runtime_image"],
+              "GO_VERSION": go["version"],
+              "GO_BUILDER_IMAGE": go["builder_image"],
+              "BINARY_VERSION": release["binary_version"],
+              "IMAGE_VERSION": release["binary_version"],
+              "RELEASE_TAG": release["release_tag"],
+              "IMAGE_REPOSITORY": release["image_repository"],
+              "IMAGE_TAG": release["image_tag"],
+              "MOVING_IMAGE_TAG": release["moving_image_tag"],
+              "WRAPPER_REPOSITORY": os.environ["GITHUB_REPOSITORY"],
+              "WRAPPER_SHA": os.environ["GITHUB_SHA"],
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for key, value in environment.items():
+                  if "\n" in value or "\r" in value:
+                      raise SystemExit(f"newline in locked value for {key}")
+                  env_file.write(f"{key}={value}\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"source_sha={source['commit']}\n")
+              output.write(f"source_tag={source['tag']}\n")
+          print(f"locked_source={source['repository']}@{source['commit']}")
+          print(f"source_tag={source['tag']}")
+          print(f"binary_version={release['binary_version']}")
+          print(f"image={release['image_repository']}:{release['image_tag']}")
+          PY
+
+      - name: Checkout exact Outline Caddy source tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: DobbyVPN/outliner-tunnel-server-fork
+          ref: ${{ steps.recipe.outputs.source_tag }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source tag and set reproducible timestamps
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          tag_sha="$(git -C source rev-parse "refs/tags/$SOURCE_TAG^{commit}")"
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$tag_sha" = "$SOURCE_SHA"
+          git -C source cat-file -e "$UPSTREAM_BASE_SHA^{commit}"
+          git -C source merge-base --is-ancestor "$UPSTREAM_BASE_SHA" "$SOURCE_SHA"
+          git -C source diff --name-only "$UPSTREAM_BASE_SHA...$SOURCE_SHA" \
+            | python3 -c 'import sys; paths=[line.rstrip("\n") for line in sys.stdin]; bad=[p for p in paths if not p.startswith("outlinecaddy/")]; print("source_changed_paths="+str(len(paths))); bad and sys.exit("changes escape outlinecaddy/: "+", ".join(bad)); not paths and sys.exit("source tag contains no changes from pinned base")'
+          test -z "$(git -C source status --porcelain=v1 --untracked-files=all)"
+          epoch="$(git -C source show -s --format=%ct "$SOURCE_SHA")"
+          source_date="$(date -u -d "@$epoch" '+%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "SOURCE_DATE_EPOCH=$epoch"
+            echo "SOURCE_DATE=$source_date"
+          } >> "$GITHUB_ENV"
+          {
+            echo "source_sha=$actual_sha"
+            echo "source_date=$source_date"
+          } >> "$GITHUB_OUTPUT"
+          echo "source_commit=$actual_sha"
+          echo "source_commit_date_utc=$source_date"
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Verify resolved Caddy and Outline module origins
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/logs
+          python3 scripts/verify-caddy-dbby-module-origins.py \
+            --source-dir source \
+            --output out/logs/module-origins.json \
+            2>&1 | tee out/logs/module-origin-verification.log
+
+      - name: Test release staging and immutable asset verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/logs
+          python3 -m unittest discover -s tests -v \
+            2>&1 | tee out/logs/build-workflow-tests.log
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up pinned Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          version: v0.37.2
+
+      - name: Run the Outline Caddy regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/logs
+          if [[ ! -f source/outlinecaddy/scripts/review.sh ]]; then
+            echo "source tag is missing outlinecaddy/scripts/review.sh; refusing to build" | tee out/logs/outlinecaddy-review.log >&2
+            exit 1
+          fi
+          (
+            cd source/outlinecaddy
+            GOWORK=off GOTOOLCHAIN=local bash ./scripts/review.sh
+          ) 2>&1 | tee out/logs/outlinecaddy-review.log
+
+      - name: Build and verify the amd64 release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/docker-binary-amd64
+          scripts/build-caddy-dbby-image.sh \
+            --platforms linux/amd64 \
+            --target caddy-binary \
+            --output "type=local,dest=$PWD/out/docker-binary-amd64" \
+            2>&1 | tee out/logs/build-binary-amd64.log
+          install -m 0755 out/docker-binary-amd64/caddy out/caddy
+          scripts/verify-caddy-dbby-binary.sh out/caddy "$BINARY_VERSION" "$CADDY_VERSION" \
+            2>&1 | tee out/logs/verify-binary.log
+          archive="caddy_${BINARY_VERSION#v}_linux_amd64.tar.gz"
+          BINARY_VERSION="$BINARY_VERSION" scripts/package-caddy-dbby.sh \
+            source out/caddy out "$SOURCE_DATE_EPOCH" \
+            2>&1 | tee out/logs/package-binary.log
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Build and smoke-test each runtime architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r arch platform; do
+            [[ -n "$arch" ]] || continue
+            image="local/outline-caddy:$arch"
+            scripts/build-caddy-dbby-image.sh \
+              --platforms "$platform" \
+              --tag "$image" \
+              --load \
+              2>&1 | tee "out/logs/build-image-$arch.log"
+            CADDY_UPSTREAM_VERSION="$CADDY_VERSION" \
+              scripts/verify-caddy-dbby-image.sh "$image" "$platform" "$BINARY_VERSION" \
+              2>&1 | tee "out/logs/verify-image-$arch.log"
+          done <<'PLATFORMS'
+          amd64 linux/amd64
+          arm64 linux/arm64
+          armv7 linux/arm/v7
+          armv6 linux/arm/v6
+          PLATFORMS
+
+          container="$(docker create --platform linux/amd64 local/outline-caddy:amd64)"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container:/usr/bin/caddy" out/caddy-from-amd64-image
+          docker rm "$container" >/dev/null
+          trap - EXIT
+          cmp -s out/caddy out/caddy-from-amd64-image || {
+            echo "amd64 runtime image binary differs from the reviewed release binary" >&2
+            exit 1
+          }
+          echo "amd64_binary_sha256=$(sha256sum out/caddy | awk '{print $1}')"
+
+      - name: Export the four-platform OCI image for review
+        id: oci
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/build-caddy-dbby-image.sh \
+            --platforms linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6 \
+            --tag "$IMAGE_REPOSITORY:$IMAGE_TAG" \
+            --output "type=oci,name=$IMAGE_REPOSITORY:$IMAGE_TAG,dest=$PWD/out/outline-caddy.oci.tar" \
+            2>&1 | tee out/logs/build-review-oci.log
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          archive = Path("out/outline-caddy.oci.tar")
+          with tarfile.open(archive, "r:*") as image:
+              entries = {member.name for member in image.getmembers()}
+              index_bytes = image.extractfile("index.json").read()
+              for _ in range(4):
+                  index = json.loads(index_bytes)
+                  actual = {
+                      (item.get("platform", {}).get("os"),
+                       item.get("platform", {}).get("architecture"),
+                       item.get("platform", {}).get("variant", ""))
+                      for item in index.get("manifests", [])
+                      if isinstance(item.get("platform"), dict)
+                  }
+                  if actual:
+                      break
+                  nested = [
+                      item for item in index.get("manifests", [])
+                      if item.get("mediaType") in {
+                          "application/vnd.oci.image.index.v1+json",
+                          "application/vnd.docker.distribution.manifest.list.v2+json",
+                      }
+                  ]
+                  if len(nested) != 1:
+                      raise SystemExit("OCI layout does not have one nested multi-platform index")
+                  descriptor = nested[0]
+                  digest = descriptor.get("digest", "")
+                  if not digest.startswith("sha256:") or len(digest) != 71:
+                      raise SystemExit(f"invalid nested OCI index digest: {digest!r}")
+                  blob_path = "blobs/sha256/" + digest.removeprefix("sha256:")
+                  if blob_path not in entries:
+                      raise SystemExit(f"OCI archive is missing nested index {blob_path}")
+                  index_bytes = image.extractfile(blob_path).read()
+                  actual_digest = "sha256:" + hashlib.sha256(index_bytes).hexdigest()
+                  if actual_digest != digest:
+                      raise SystemExit(f"nested OCI index content is corrupt: {actual_digest} != {digest}")
+              else:
+                  raise SystemExit("OCI index nesting is deeper than expected")
+          expected = {
+              ("linux", "amd64", ""),
+              ("linux", "arm64", ""),
+              ("linux", "arm", "v7"),
+              ("linux", "arm", "v6"),
+          }
+          if actual != expected:
+              raise SystemExit(f"OCI archive platforms are {sorted(actual)!r}; expected {sorted(expected)!r}")
+          Path("out/preview-image-index.json").write_bytes(index_bytes)
+          digest = "sha256:" + hashlib.sha256(index_bytes).hexdigest()
+          print(f"preview_oci_index_digest={digest}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"preview_oci_index_digest={digest}\n")
+          PY
+
+      - name: Write preview checksums and build provenance
+        id: provenance
+        env:
+          OUTLINE_SDK_VERSION: v0.0.23
+          OUTLINE_SDK_X_VERSION: v0.2.0
+          PREVIEW_OCI_INDEX_DIGEST: ${{ steps.oci.outputs.preview_oci_index_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_REPOSITORY="$SOURCE_REPOSITORY" \
+          SOURCE_TAG="$SOURCE_TAG" \
+          SOURCE_SHA="$SOURCE_SHA" \
+          SOURCE_DATE="$SOURCE_DATE" \
+          UPSTREAM_BASE_REPOSITORY="$UPSTREAM_BASE_REPOSITORY" \
+          UPSTREAM_BASE_SHA="$UPSTREAM_BASE_SHA" \
+          OUTLINE_SERVER_MODULE="$OUTLINE_SERVER_MODULE" \
+          OUTLINE_SERVER_MODULE_ORIGIN="$OUTLINE_SERVER_MODULE_ORIGIN" \
+          OUTLINE_SERVER_VERSION="$OUTLINE_SERVER_VERSION" \
+          OUTLINE_SERVER_SHA="$OUTLINE_SERVER_SHA" \
+          CADDY_VERSION="$CADDY_VERSION" \
+          CADDY_SHA="$CADDY_SHA" \
+          CADDY_MODULE_ORIGIN="$CADDY_MODULE_ORIGIN" \
+          CADDY_RUNTIME_IMAGE="$CADDY_RUNTIME_IMAGE" \
+          GO_VERSION="$GO_VERSION" \
+          GO_BUILDER_IMAGE="$GO_BUILDER_IMAGE" \
+          BINARY_VERSION="$BINARY_VERSION" \
+          RELEASE_TAG="$RELEASE_TAG" \
+          IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
+          IMAGE_TAG="$IMAGE_TAG" \
+          WRAPPER_REPOSITORY="$WRAPPER_REPOSITORY" \
+          WRAPPER_SHA="$WRAPPER_SHA" \
+          OUTLINE_SDK_VERSION="$OUTLINE_SDK_VERSION" \
+          OUTLINE_SDK_X_VERSION="$OUTLINE_SDK_X_VERSION" \
+          BUILD_SCRIPT_PATH="$PWD/scripts/build-caddy-dbby.sh" \
+          DOCKERFILE_PATH="$PWD/Dockerfile.caddy" \
+          LOCKFILE_PATH="$PWD/caddy-dbby.lock.json" \
+          PREVIEW_OCI_INDEX_DIGEST="$PREVIEW_OCI_INDEX_DIGEST" \
+          python3 scripts/write-caddy-dbby-build-info.py \
+            --binary out/caddy \
+            --archive "out/$ARCHIVE" \
+            --preview-oci-archive out/outline-caddy.oci.tar \
+            --preview-image-digest "$PREVIEW_OCI_INDEX_DIGEST" \
+            --output out/build-info.json
+          (cd out && sha256sum "$ARCHIVE" build-info.json > checksums.txt)
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "preview_image_digest=$PREVIEW_OCI_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Upload review package, OCI image, checksums, and test logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: outline-caddy-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      - name: Summarize review artifact
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Outline Caddy preview"
+            echo
+            echo "Source: \`$SOURCE_REPOSITORY@$SOURCE_SHA\` (\`$SOURCE_TAG\`)"
+            echo "Binary version: \`$BINARY_VERSION\`"
+            echo "OCI image: \`$IMAGE_REPOSITORY:$IMAGE_TAG\`"
+            if [[ -f out/build-info.json ]]; then
+              echo "Review artifacts: \`outline-caddy-preview-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT\`"
+            else
+              echo "Build did not reach provenance generation; see uploaded logs for the failure."
+            fi
+            if [[ "${{ inputs.publish }}" == true ]]; then
+              echo "Publish job requested; it runs only after this verification job passes."
+            else
+              echo "Publish is disabled. No registry or release writes were performed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish verified prerelease and image
+    needs: verify
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OFFICIAL_LATEST_IMAGE_REFERENCE: ghcr.io/dobbyvpn/outline-ss-server:latest
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout build recipe
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Download reviewed build artifact
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: outline-caddy-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out
+
+      - name: Revalidate the locked source and preview artifact
+        env:
+          EXPECTED_SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
+          REQUESTED_SOURCE_TAG: ${{ needs.verify.outputs.source_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          lock = json.loads(Path("caddy-dbby.lock.json").read_text(encoding="utf-8"))
+          info = json.loads(Path("out/build-info.json").read_text(encoding="utf-8"))
+          source = lock["source"]
+          release = lock["release"]
+          if source["commit"] != os.environ["EXPECTED_SOURCE_SHA"]:
+              raise SystemExit("current lock source SHA differs from the verified job")
+          if source["tag"] != os.environ["REQUESTED_SOURCE_TAG"]:
+              raise SystemExit("current lock source tag differs from the verified job")
+          if info["source"]["commit"] != source["commit"] or info["source"]["ref"] != source["tag"]:
+              raise SystemExit("preview build-info source identity does not match the lock")
+          if info["version"] != release["binary_version"] or info["release_tag"] != release["release_tag"]:
+              raise SystemExit("preview build-info release identity does not match the lock")
+          for relative, expected in (
+              ("out/caddy", info["binary"]["sha256"]),
+              (f"out/{info['archive']['name']}", info["archive"]["sha256"]),
+              ("out/outline-caddy.oci.tar", info["preview_oci_archive"]["sha256"]),
+          ):
+              actual = hashlib.sha256(Path(relative).read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f"preview artifact hash mismatch for {relative}")
+          archive_name = info["archive"]["name"]
+          Path("out/archive-name.txt").write_text(archive_name + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"ARCHIVE={archive_name}\n")
+          print(f"preview_source={source['commit']}")
+          print(f"preview_binary_sha256={info['binary']['sha256']}")
+          print(f"preview_oci_index={info['image']['preview_oci_index_digest']}")
+          PY
+          (cd out && sha256sum -c checksums.txt)
+          chmod 0755 out/caddy
+          archive="$(cat out/archive-name.txt)"
+          mkdir -p out/extracted
+          tar -xzf "out/$archive" -C out/extracted
+          cmp -s out/caddy out/extracted/caddy || {
+            echo "release archive does not contain the reviewed binary" >&2
+            exit 1
+          }
+          scripts/verify-caddy-dbby-binary.sh out/caddy v2.11.7-dbby v2.11.7
+
+      - name: Checkout exact Outline Caddy source tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: DobbyVPN/outliner-tunnel-server-fork
+          ref: ${{ needs.verify.outputs.source_tag }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load locked publish build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          lock = json.loads(Path("caddy-dbby.lock.json").read_text(encoding="utf-8"))
+          source, caddy, go, release = lock["source"], lock["caddy"], lock["go"], lock["release"]
+          values = {
+              "SOURCE_REPOSITORY": source["repository"], "SOURCE_TAG": source["tag"],
+              "SOURCE_SHA": source["commit"],
+              "UPSTREAM_BASE_REPOSITORY": source["upstream_base_repository"],
+              "UPSTREAM_BASE_SHA": source["upstream_base_commit"],
+              "OUTLINE_SERVER_MODULE": source["outline_server_module"],
+              "OUTLINE_SERVER_MODULE_ORIGIN": source["outline_server_module_origin"],
+              "OUTLINE_SERVER_VERSION": source["outline_server_version"],
+              "OUTLINE_SERVER_SHA": source["outline_server_commit"],
+              "CADDY_VERSION": caddy["version"], "CADDY_SHA": caddy["commit"],
+              "CADDY_MODULE_ORIGIN": caddy["module_origin"],
+              "CADDY_RUNTIME_IMAGE": caddy["runtime_image"],
+              "GO_VERSION": go["version"], "GO_BUILDER_IMAGE": go["builder_image"],
+              "BINARY_VERSION": release["binary_version"], "IMAGE_VERSION": release["binary_version"],
+              "ARCHIVE": f"caddy_{release['binary_version'].removeprefix('v')}_linux_amd64.tar.gz",
+              "RELEASE_TAG": release["release_tag"], "IMAGE_REPOSITORY": release["image_repository"],
+              "IMAGE_TAG": release["image_tag"], "MOVING_IMAGE_TAG": release["moving_image_tag"],
+              "WRAPPER_REPOSITORY": os.environ["GITHUB_REPOSITORY"],
+              "WRAPPER_SHA": os.environ["GITHUB_SHA"],
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PY
+
+      - name: Verify publish source and set reproducible timestamps
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          tag_sha="$(git -C source rev-parse "refs/tags/$SOURCE_TAG^{commit}")"
+          test "$actual_sha" = "$SOURCE_SHA"
+          test "$tag_sha" = "$SOURCE_SHA"
+          git -C source cat-file -e "$UPSTREAM_BASE_SHA^{commit}"
+          git -C source merge-base --is-ancestor "$UPSTREAM_BASE_SHA" "$SOURCE_SHA"
+          git -C source diff --name-only "$UPSTREAM_BASE_SHA...$SOURCE_SHA" \
+            | python3 -c 'import sys; paths=[line.rstrip("\n") for line in sys.stdin]; bad=[p for p in paths if not p.startswith("outlinecaddy/")]; print("publish_source_changed_paths="+str(len(paths))); bad and sys.exit("changes escape outlinecaddy/: "+", ".join(bad)); not paths and sys.exit("source tag contains no changes from pinned base")'
+          epoch="$(git -C source show -s --format=%ct "$SOURCE_SHA")"
+          source_date="$(date -u -d "@$epoch" '+%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "SOURCE_DATE_EPOCH=$epoch"
+            echo "SOURCE_DATE=$source_date"
+          } >> "$GITHUB_ENV"
+          mkdir -p out/logs
+          echo "publish_source=$actual_sha"
+
+      - name: Set up pinned Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.8
+          cache: false
+
+      - name: Verify resolved Caddy and Outline module origins
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-caddy-dbby-module-origins.py \
+            --source-dir source \
+            --output out/logs/module-origins-publish.json \
+            2>&1 | tee out/logs/module-origin-verification-publish.log
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up pinned Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        with:
+          version: v0.37.2
+
+      - name: Rebuild the locked binary and compare with reviewed artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/docker-binary-publish
+          scripts/build-caddy-dbby-image.sh \
+            --platforms linux/amd64 \
+            --target caddy-binary \
+            --output "type=local,dest=$PWD/out/docker-binary-publish" \
+            2>&1 | tee out/logs/build-publish-binary.log
+          cmp -s out/caddy out/docker-binary-publish/caddy || {
+            echo "publish build binary differs from the reviewed artifact" >&2
+            exit 1
+          }
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Record official latest release and image identities
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "/repos/$GITHUB_REPOSITORY/releases/latest" \
+            >out/logs/official-latest-release-before.json 2>out/logs/official-latest-release-before.err; then
+            official_release="$(python3 -c 'import json; print(json.load(open("out/logs/official-latest-release-before.json"))["tag_name"])')"
+          elif grep -Eiq 'HTTP 404|Not Found' out/logs/official-latest-release-before.err; then
+            official_release=absent
+          else
+            cat out/logs/official-latest-release-before.err >&2
+            exit 1
+          fi
+          if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
+            >out/logs/official-latest-image-before.json 2>out/logs/official-latest-image-before.err; then
+            official_image="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
+              | awk '$1 == "Digest:" { print $2; exit }')"
+            if [[ ! "$official_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "official latest image did not resolve to a full digest" >&2
+              exit 1
+            fi
+          elif grep -Eiq 'not found|manifest unknown|no such manifest' out/logs/official-latest-image-before.err; then
+            official_image=absent
+          else
+            cat out/logs/official-latest-image-before.err >&2
+            exit 1
+          fi
+          {
+            echo "OFFICIAL_LATEST_RELEASE_TAG=$official_release"
+            echo "OFFICIAL_LATEST_IMAGE_DIGEST=$official_image"
+          } >> "$GITHUB_ENV"
+          echo "official_latest_release_before=$official_release"
+          echo "official_latest_image_digest_before=$official_image"
+
+      - name: Create or verify immutable multi-platform image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag="$IMAGE_REPOSITORY:$IMAGE_TAG"
+          image_ref=""
+          remote_index=out/logs/remote-index.json
+          if docker buildx imagetools inspect --raw "$image_tag" >"$remote_index" 2>out/logs/image-inspect.err; then
+            echo "immutable image tag already exists; verifying it without overwriting"
+            image_digest="$(docker buildx imagetools inspect "$image_tag" | awk '$1 == "Digest:" { print $2; exit }')"
+            if [[ ! "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "registry did not return a full immutable image digest" >&2
+              exit 1
+            fi
+            image_ref="$IMAGE_REPOSITORY@$image_digest"
+          else
+            status=$?
+            if ! grep -Eiq 'not found|manifest unknown|no such manifest' out/logs/image-inspect.err; then
+              cat out/logs/image-inspect.err >&2
+              exit "$status"
+            fi
+            echo "immutable image tag is absent; publishing pinned build"
+            scripts/build-caddy-dbby-image.sh \
+              --platforms linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6 \
+              --tag "$image_tag" \
+              --push \
+              --metadata-file out/publish-build-metadata.json \
+              2>&1 | tee out/logs/publish-image.log
+            image_digest="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          metadata = json.loads(Path("out/publish-build-metadata.json").read_text(encoding="utf-8"))
+          digest = metadata.get("containerimage.digest", "")
+          if not digest.startswith("sha256:") or len(digest) != 71:
+              raise SystemExit(f"Buildx did not report a valid image index digest: {digest!r}")
+          print(digest)
+          PY
+          )"
+            docker buildx imagetools inspect --raw "$image_tag" >"$remote_index"
+            remote_digest="$(docker buildx imagetools inspect "$image_tag" | awk '$1 == "Digest:" { print $2; exit }')"
+            if [[ "$remote_digest" != "$image_digest" ]]; then
+              echo "registry image index $remote_digest differs from Buildx digest $image_digest" >&2
+              exit 1
+            fi
+            image_ref="$IMAGE_REPOSITORY@$image_digest"
+          fi
+
+          python3 - "$remote_index" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          platforms = {
+              (m.get("platform", {}).get("os"), m.get("platform", {}).get("architecture"),
+               m.get("platform", {}).get("variant", ""))
+              for m in index.get("manifests", [])
+          }
+          expected = {("linux", "amd64", ""), ("linux", "arm64", ""),
+                      ("linux", "arm", "v7"), ("linux", "arm", "v6")}
+          if platforms != expected:
+              raise SystemExit(f"published index platforms {sorted(platforms)!r} != {sorted(expected)!r}")
+          PY
+
+          for spec in 'amd64 linux/amd64' 'arm64 linux/arm64' 'armv7 linux/arm/v7' 'armv6 linux/arm/v6'; do
+            read -r arch platform <<<"$spec"
+            docker pull --platform "$platform" "$image_ref" 2>&1 | tee "out/logs/pull-$arch.log"
+            revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_ref")"
+            version="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image_ref")"
+            wrapper_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.wrapper-revision" }}' "$image_ref")"
+            caddy_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-version" }}' "$image_ref")"
+            caddy_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.caddy-revision" }}' "$image_ref")"
+            server_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-version" }}' "$image_ref")"
+            server_revision="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.outline-server-revision" }}' "$image_ref")"
+            go_version="$(docker image inspect --format '{{ index .Config.Labels "com.dobbyvpn.outline-caddy.go-version" }}' "$image_ref")"
+            if [[ "$revision" != "$SOURCE_SHA" || "$version" != "$BINARY_VERSION" || \
+              "$wrapper_revision" != "$WRAPPER_SHA" || "$caddy_version" != "$CADDY_VERSION" || \
+              "$caddy_revision" != "$CADDY_SHA" || "$server_version" != "$OUTLINE_SERVER_VERSION" || \
+              "$server_revision" != "$OUTLINE_SERVER_SHA" || "$go_version" != "$GO_VERSION" ]]; then
+              echo "$arch image labels do not match locked source/wrapper/version/toolchain revisions" >&2
+              exit 1
+            fi
+            CADDY_UPSTREAM_VERSION="$CADDY_VERSION" \
+              scripts/verify-caddy-dbby-image.sh "$image_ref" "$platform" "$BINARY_VERSION" \
+              2>&1 | tee "out/logs/verify-published-$arch.log"
+          done
+
+          container="$(docker create --platform linux/amd64 "$image_ref")"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker cp "$container:/usr/bin/caddy" out/caddy-from-published-image
+          docker rm "$container" >/dev/null
+          trap - EXIT
+          cmp -s out/caddy out/caddy-from-published-image || {
+            echo "published amd64 image binary differs from the reviewed binary" >&2
+            exit 1
+          }
+          echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
+          echo "ref=$IMAGE_REPOSITORY@$image_digest" >> "$GITHUB_OUTPUT"
+          echo "immutable_image=$IMAGE_REPOSITORY@$image_digest"
+
+      - name: Write final provenance with published image digest
+        id: final-provenance
+        env:
+          OUTLINE_SDK_VERSION: v0.0.23
+          OUTLINE_SDK_X_VERSION: v0.2.0
+          PUBLISHED_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          preview_digest="$(python3 -c 'import json; print(json.load(open("out/build-info.json"))["image"]["preview_oci_index_digest"])')"
+          SOURCE_REPOSITORY="$SOURCE_REPOSITORY" \
+          SOURCE_TAG="$SOURCE_TAG" \
+          SOURCE_SHA="$SOURCE_SHA" \
+          SOURCE_DATE="$SOURCE_DATE" \
+          UPSTREAM_BASE_REPOSITORY="$UPSTREAM_BASE_REPOSITORY" \
+          UPSTREAM_BASE_SHA="$UPSTREAM_BASE_SHA" \
+          OUTLINE_SERVER_MODULE="$OUTLINE_SERVER_MODULE" \
+          OUTLINE_SERVER_MODULE_ORIGIN="$OUTLINE_SERVER_MODULE_ORIGIN" \
+          OUTLINE_SERVER_VERSION="$OUTLINE_SERVER_VERSION" \
+          OUTLINE_SERVER_SHA="$OUTLINE_SERVER_SHA" \
+          CADDY_VERSION="$CADDY_VERSION" \
+          CADDY_SHA="$CADDY_SHA" \
+          CADDY_MODULE_ORIGIN="$CADDY_MODULE_ORIGIN" \
+          CADDY_RUNTIME_IMAGE="$CADDY_RUNTIME_IMAGE" \
+          GO_VERSION="$GO_VERSION" \
+          GO_BUILDER_IMAGE="$GO_BUILDER_IMAGE" \
+          BINARY_VERSION="$BINARY_VERSION" \
+          RELEASE_TAG="$RELEASE_TAG" \
+          IMAGE_REPOSITORY="$IMAGE_REPOSITORY" \
+          IMAGE_TAG="$IMAGE_TAG" \
+          WRAPPER_REPOSITORY="$WRAPPER_REPOSITORY" \
+          WRAPPER_SHA="$WRAPPER_SHA" \
+          OUTLINE_SDK_VERSION="$OUTLINE_SDK_VERSION" \
+          OUTLINE_SDK_X_VERSION="$OUTLINE_SDK_X_VERSION" \
+          BUILD_SCRIPT_PATH="$PWD/scripts/build-caddy-dbby.sh" \
+          DOCKERFILE_PATH="$PWD/Dockerfile.caddy" \
+          LOCKFILE_PATH="$PWD/caddy-dbby.lock.json" \
+          python3 scripts/write-caddy-dbby-build-info.py \
+            --binary out/caddy \
+            --archive "out/$ARCHIVE" \
+            --preview-oci-archive out/outline-caddy.oci.tar \
+            --preview-image-digest "$preview_digest" \
+            --published-image-digest "$PUBLISHED_IMAGE_DIGEST" \
+            --output out/build-info.json
+          (cd out && sha256sum "$ARCHIVE" build-info.json > checksums.txt)
+
+      - name: Stage and publish the immutable prerelease
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISHED_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/publish-caddy-dbby-release.sh 2>&1 | tee out/logs/release-publish.log
+
+      - name: Verify published release assets before moving the image alias
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISHED_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/publish-caddy-dbby-release.sh --verify-only \
+            2>&1 | tee out/logs/release-final-verification.log
+
+      - name: Move the Dobby-only image alias after release verification
+        id: alias
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMMUTABLE_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          immutable_ref="${{ steps.image.outputs.ref }}"
+          docker buildx imagetools create \
+            --tag "$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG" \
+            "$immutable_ref" 2>&1 | tee out/logs/move-dbby-alias.log
+          docker buildx imagetools inspect --raw "$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG" \
+            >out/logs/moving-alias-index.json
+          python3 - out/logs/moving-alias-index.json <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          platforms = {
+              (m.get("platform", {}).get("os"), m.get("platform", {}).get("architecture"),
+               m.get("platform", {}).get("variant", ""))
+              for m in index.get("manifests", [])
+          }
+          expected = {("linux", "amd64", ""), ("linux", "arm64", ""),
+                      ("linux", "arm", "v7"), ("linux", "arm", "v6")}
+          if platforms != expected:
+              raise SystemExit(f"Dobby alias platforms {sorted(platforms)!r} != {sorted(expected)!r}")
+          PY
+          alias_digest="$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG" | awk '$1 == "Digest:" { print $2; exit }')"
+          if [[ ! "$alias_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Dobby alias did not resolve to a full image digest" >&2
+            exit 1
+          fi
+          if [[ "$alias_digest" != "$IMMUTABLE_IMAGE_DIGEST" ]]; then
+            echo "Dobby alias digest $alias_digest differs from immutable index $IMMUTABLE_IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+          if gh api "/repos/$GITHUB_REPOSITORY/releases/latest" \
+            >out/logs/official-latest-release-after.json 2>out/logs/official-latest-release-after.err; then
+            official_release_after="$(python3 -c 'import json; print(json.load(open("out/logs/official-latest-release-after.json"))["tag_name"])')"
+          elif grep -Eiq 'HTTP 404|Not Found' out/logs/official-latest-release-after.err; then
+            official_release_after=absent
+          else
+            cat out/logs/official-latest-release-after.err >&2
+            exit 1
+          fi
+          if [[ "$official_release_after" != "$OFFICIAL_LATEST_RELEASE_TAG" ]]; then
+            echo "official latest GitHub release changed from $OFFICIAL_LATEST_RELEASE_TAG to $official_release_after" >&2
+            exit 1
+          fi
+          if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
+            >out/logs/official-latest-image-after.json 2>out/logs/official-latest-image-after.err; then
+            official_image_after="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
+              | awk '$1 == "Digest:" { print $2; exit }')"
+          elif grep -Eiq 'not found|manifest unknown|no such manifest' out/logs/official-latest-image-after.err; then
+            official_image_after=absent
+          else
+            cat out/logs/official-latest-image-after.err >&2
+            exit 1
+          fi
+          if [[ "$official_image_after" != "$OFFICIAL_LATEST_IMAGE_DIGEST" ]]; then
+            echo "official latest image changed from $OFFICIAL_LATEST_IMAGE_DIGEST to $official_image_after" >&2
+            exit 1
+          fi
+          echo "alias_digest=$alias_digest" >> "$GITHUB_OUTPUT"
+          echo "moving_alias=$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG@$alias_digest"
+
+      - name: Upload final publication evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: outline-caddy-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/build-info.json
+            out/checksums.txt
+            out/logs/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      - name: Summarize publication
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Outline Caddy publication"
+            echo
+            echo "Immutable image: \`$IMAGE_REPOSITORY:$IMAGE_TAG\`"
+            echo "Release: \`$RELEASE_TAG\`"
+            if [[ -n "${{ steps.image.outputs.digest }}" ]]; then
+              echo "Image digest: \`${{ steps.image.outputs.digest }}\`"
+            fi
+            if [[ -n "${{ steps.alias.outputs.alias_digest }}" ]]; then
+              echo "Dobby-only alias: \`$IMAGE_REPOSITORY:$MOVING_IMAGE_TAG\`"
+            fi
+            echo "No deployment was performed."
+          } >> "$GITHUB_STEP_SUMMARY"

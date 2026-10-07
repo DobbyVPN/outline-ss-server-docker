@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "source": {
+    "repository": "DobbyVPN/outliner-tunnel-server-fork",
+    "tag": "outlinecaddy/v0.0.2-dbby",
+    "commit": "4a47366f81ed95dd386dcc5c64c0284a178be174",
+    "upstream_base_repository": "OutlineFoundation/tunnel-server",
+    "upstream_base_commit": "2e9909e67173be0275d25a381cc5555e0e56d9af",
+    "outline_server_module": "golang.getoutline.org/tunnel-server",
+    "outline_server_module_origin": "https://github.com/Jigsaw-Code/outline-ss-server",
+    "outline_server_version": "v1.9.3-rc2",
+    "outline_server_commit": "d019cea7add912de4be2cb1a6a0aa8e4c56c1077"
+  },
+  "caddy": {
+    "version": "v2.11.7",
+    "commit": "72dd0fb067f6d7826c7f79907670ba4a713bfe37",
+    "module_origin": "https://github.com/caddyserver/caddy",
+    "runtime_image": "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f"
+  },
+  "go": {
+    "version": "1.26.8",
+    "builder_image": "golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c"
+  },
+  "release": {
+    "binary_version": "v2.11.7-dbby",
+    "release_tag": "caddy-v2.11.7-dbby",
+    "image_repository": "ghcr.io/dobbyvpn/outline-caddy",
+    "image_tag": "v2.11.7-dbby",
+    "moving_image_tag": "latest-dbby"
+  }
+}
