@@ -5,15 +5,16 @@ on:
     - cron: '0 3 * * *'
     - cron: '0 4 * * *'
     - cron: '0 5 * * *'
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       channel:
         description: Version channel
         required: true
         type: choice
-        options: [stable, prerelease, development]
+        options: [stable, prerelease, development, dbby]
       ref:
-        description: Optional exact upstream tag or development commit SHA
+        description: Optional exact source tag or development commit SHA
         required: false
         type: string
 
@@ -46,6 +47,7 @@ jobs:
 
           repo = "https://github.com/OutlineFoundation/tunnel-server"
           api = "https://api.github.com/repos/OutlineFoundation/tunnel-server"
+          fork_repo = "DobbyVPN/outliner-tunnel-server-fork"
           def get(url):
               req = urllib.request.Request(url, headers={
                   "Accept": "application/vnd.github+json",
@@ -57,14 +59,33 @@ jobs:
                   ["git", "ls-remote", "--tags", "--refs", repo + ".git"], text=True)
               return {line.split("\t", 1)[1].removeprefix("refs/tags/")
                       for line in text.splitlines() if "\t" in line}
+          def tagged_commits(repository):
+              text = subprocess.check_output(
+                  ["git", "ls-remote", "--tags", repository + ".git"], text=True)
+              result = {}
+              peeled = {}
+              for line in text.splitlines():
+                  if "\t" not in line:
+                      continue
+                  sha, ref = line.split("\t", 1)
+                  name = ref.removeprefix("refs/tags/")
+                  if name.endswith("^{}"):
+                      peeled[name[:-3]] = sha
+                  else:
+                      result[name] = sha
+              result.update(peeled)
+              return result
 
           stable = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
           prerelease = re.compile(
               r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-"
               r"[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$")
+          dbby_tag = re.compile(
+              r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dbby$")
           if os.environ["EVENT_NAME"] == "schedule":
               channel = {"0 3 * * *": "stable", "0 4 * * *": "development",
-                         "0 5 * * *": "prerelease"}.get(os.environ.get("EVENT_SCHEDULE"))
+                         "0 5 * * *": "prerelease", "0 6 * * *": "dbby"}.get(
+                             os.environ.get("EVENT_SCHEDULE"))
               if not channel:
                   raise SystemExit("Unknown schedule")
           else:
@@ -87,7 +108,32 @@ jobs:
               ).astimezone(timezone.utc)
               result.append({"channel": channel,
                   "tag": f"dev-{date.strftime('%y%b%d')}-{sha[:12]}",
-                  "ref": sha, "sha": sha, "latest": False})
+                  "ref": sha, "sha": sha, "source_repo": "OutlineFoundation/tunnel-server",
+                  "latest": False})
+          elif channel == "dbby":
+              remote = tagged_commits(f"https://github.com/{fork_repo}")
+              if requested:
+                  tag = requested if requested.startswith("v") else "v" + requested
+                  if not dbby_tag.fullmatch(tag) or tag not in remote:
+                      raise SystemExit(f"Not a tagged DobbyVPN fork release: {tag}")
+                  candidates = [tag]
+              else:
+                  candidates = sorted(
+                      (tag for tag in remote if dbby_tag.fullmatch(tag)),
+                      key=lambda tag: (tuple(map(int, dbby_tag.fullmatch(tag).groups())), tag))
+              result = []
+              if candidates:
+                  upstream_tags = tagged_commits(repo)
+                  for tag in candidates:
+                      base_ref = tag.removesuffix("-dbby")
+                      if base_ref not in upstream_tags:
+                          raise SystemExit(f"Missing matching upstream base tag: {base_ref}")
+                      result.append({"channel": channel, "tag": tag, "ref": tag,
+                          "sha": remote[tag], "source_repo": fork_repo,
+                          "upstream_base_repo": "OutlineFoundation/tunnel-server",
+                          "upstream_base_ref": base_ref,
+                          "upstream_base_sha": upstream_tags[base_ref],
+                          "latest": False})
           else:
               remote = tags()
               latest = get(f"{api}/releases/latest")["tag_name"]
@@ -105,23 +151,26 @@ jobs:
                   if release.get("draft") or release.get("prerelease"):
                       raise SystemExit(f"Not a published stable release: {tag}")
                   result.append({"channel": channel, "tag": tag, "ref": tag,
+                                 "source_repo": "OutlineFoundation/tunnel-server",
                                  "latest": tag == latest})
               elif requested:
                   tag = requested if requested.startswith("v") else "v" + requested
-                  match = prerelease.fullmatch(tag)
+                  match = prerelease.fullmatch(tag) if not tag.endswith("-dbby") else None
                   if not match or tag not in remote:
                       raise SystemExit(f"Not an upstream prerelease tag: {tag}")
                   if tuple(map(int, match.groups()[:3])) <= latest_core:
                       raise SystemExit(f"Prerelease is not newer than stable: {tag}")
                   result.append({"channel": channel, "tag": tag, "ref": tag,
+                                 "source_repo": "OutlineFoundation/tunnel-server",
                                  "latest": False})
               else:
                   found = []
                   for tag in remote:
-                      match = prerelease.fullmatch(tag)
+                      match = prerelease.fullmatch(tag) if not tag.endswith("-dbby") else None
                       if match and tuple(map(int, match.groups()[:3])) > latest_core:
                           found.append((tuple(map(int, match.groups()[:3])), tag))
                   result = [{"channel": channel, "tag": tag, "ref": tag,
+                             "source_repo": "OutlineFoundation/tunnel-server",
                              "latest": False} for _, tag in sorted(found)]
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"has_targets={str(bool(result)).lower()}\n")
@@ -130,7 +179,8 @@ jobs:
           for item in result:
               print("release_tag=" + item["tag"])
           if not result:
-              print("No upstream prerelease tags need a build.")
+              print("No fork dbby tags need a build." if channel == "dbby"
+                    else "No upstream prerelease tags need a build.")
           PY
 
   build:
@@ -149,10 +199,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout upstream source
+      - name: Checkout exact source tag or commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          repository: OutlineFoundation/tunnel-server
+          repository: ${{ matrix.target.source_repo }}
           ref: ${{ matrix.target.ref }}
           path: upstream
           submodules: recursive
@@ -163,16 +213,29 @@ jobs:
         env:
           CHANNEL: ${{ matrix.target.channel }}
           RELEASE_TAG: ${{ matrix.target.tag }}
-          UPSTREAM_REF: ${{ matrix.target.ref }}
+          SOURCE_REF: ${{ matrix.target.ref }}
+          SOURCE_REPO: ${{ matrix.target.source_repo }}
           EXPECTED_SHA: ${{ matrix.target.sha }}
           LATEST_STABLE: ${{ matrix.target.latest }}
+          UPSTREAM_BASE_REPO: ${{ matrix.target.upstream_base_repo }}
+          UPSTREAM_BASE_REF: ${{ matrix.target.upstream_base_ref }}
+          UPSTREAM_BASE_SHA: ${{ matrix.target.upstream_base_sha }}
         shell: bash
         run: |
           set -euo pipefail
           sha="$(git -C upstream rev-parse HEAD)"
           if [ -n "$EXPECTED_SHA" ]; then test "$sha" = "$EXPECTED_SHA"; fi
           if [ "$CHANNEL" != development ]; then
-            test "$sha" = "$(git -C upstream rev-parse "refs/tags/$UPSTREAM_REF^{commit}")"
+            test "$sha" = "$(git -C upstream rev-parse "refs/tags/$SOURCE_REF^{commit}")"
+          fi
+          if [ "$CHANNEL" = dbby ]; then
+            if [ "$(git -C upstream rev-parse --is-shallow-repository)" = true ]; then
+              git -C upstream fetch --unshallow --no-tags origin "$SOURCE_REF"
+            fi
+            if ! git -C upstream merge-base --is-ancestor "$UPSTREAM_BASE_SHA" "$sha"; then
+              echo "Fork source does not descend from the recorded upstream base" >&2
+              exit 1
+            fi
           fi
           epoch="$(git -C upstream show -s --format=%ct HEAD)"
           source_date="$(date -u -d "@$epoch" '+%F')"
@@ -191,14 +254,26 @@ jobs:
             go_version="$(python3 - <<'PY'
           from pathlib import Path
           import re
+          import os
           values = {}
           for line in Path("upstream/go.mod").read_text().splitlines():
               fields = line.split()
               if fields and fields[0] in {"go", "toolchain"}:
                   values[fields[0]] = fields[1]
-          version = values.get("toolchain", values.get("go", "")).removeprefix("go")
-          if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version):
-              raise SystemExit(f"unsupported Go version: {version!r}")
+          def parse(value):
+              version = value.removeprefix("go")
+              if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version):
+                  raise SystemExit(f"unsupported Go version: {value!r}")
+              parts = tuple(map(int, version.split(".")))
+              return parts + (0,) * (3 - len(parts))
+          if os.environ.get("CHANNEL") == "dbby":
+              candidates = [(1, 24, 8)]
+              candidates.extend(parse(value) for value in values.values())
+              version = ".".join(map(str, max(candidates)))
+          else:
+              version = values.get("toolchain", values.get("go", "")).removeprefix("go")
+              if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version):
+                  raise SystemExit(f"unsupported Go version: {version!r}")
           print(version)
           PY
           )"
@@ -209,6 +284,10 @@ jobs:
             echo "source_date=$source_date"
             echo "version=$version"
             echo "go_version=$go_version"
+            echo "source_repo=$SOURCE_REPO"
+            echo "upstream_base_repo=$UPSTREAM_BASE_REPO"
+            echo "upstream_base_ref=$UPSTREAM_BASE_REF"
+            echo "upstream_base_sha=$UPSTREAM_BASE_SHA"
             echo "archive=outline-ss-server_${version}_linux_x86_64.tar.gz"
             echo "method=$method"
             echo "latest=$LATEST_STABLE"
@@ -224,6 +303,11 @@ jobs:
           CHANNEL: ${{ matrix.target.channel }}
           RELEASE_TAG: ${{ matrix.target.tag }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_REPO: ${{ steps.source.outputs.source_repo }}
+          SOURCE_REF: ${{ matrix.target.ref }}
+          UPSTREAM_BASE_REPO: ${{ steps.source.outputs.upstream_base_repo }}
+          UPSTREAM_BASE_REF: ${{ steps.source.outputs.upstream_base_ref }}
+          UPSTREAM_BASE_SHA: ${{ steps.source.outputs.upstream_base_sha }}
           VERSION: ${{ steps.source.outputs.version }}
           ARCHIVE: ${{ steps.source.outputs.archive }}
           METHOD: ${{ steps.source.outputs.method }}
@@ -255,7 +339,7 @@ jobs:
             body="$(jq -r '.body' "$response")"
             grep -Fq 'Standalone Linux amd64 Outline tunnel-server binary.' <<< "$body"
             grep -Fq "Channel: $CHANNEL" <<< "$body"
-            grep -Fq "commit/$SOURCE_SHA" <<< "$body"
+            grep -Fq "https://github.com/$SOURCE_REPO/commit/$SOURCE_SHA" <<< "$body"
             mapfile -t draft_names < <(jq -r '.assets[].name' "$response")
             for name in "${draft_names[@]}"; do
               case "$name" in "$ARCHIVE"|checksums.txt|build-info.json) ;; *)
@@ -267,11 +351,26 @@ jobs:
               gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$draft_dir"
             fi
             if [ -f "$draft_dir/build-info.json" ]; then
-              jq -e --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" \
-                --arg version "$VERSION" --arg sha "$SOURCE_SHA" \
-                '.channel == $channel and .release_tag == $tag and
-                 .version == $version and .upstream.commit == $sha' \
-                "$draft_dir/build-info.json" >/dev/null
+              if [ "$CHANNEL" = dbby ]; then
+                jq -e --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" \
+                  --arg version "$VERSION" --arg sha "$SOURCE_SHA" \
+                  --arg repo "$SOURCE_REPO" --arg ref "$SOURCE_REF" \
+                  --arg base_repo "$UPSTREAM_BASE_REPO" --arg base_ref "$UPSTREAM_BASE_REF" \
+                  --arg base_sha "$UPSTREAM_BASE_SHA" \
+                  '.channel == $channel and .release_tag == $tag and
+                   .version == $version and .source.repository == $repo and
+                   .source.ref == $ref and .source.commit == $sha and
+                   .upstream_base.repository == $base_repo and
+                   .upstream_base.ref == $base_ref and
+                   .upstream_base.commit == $base_sha' \
+                  "$draft_dir/build-info.json" >/dev/null
+              else
+                jq -e --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" \
+                  --arg version "$VERSION" --arg sha "$SOURCE_SHA" \
+                  '.channel == $channel and .release_tag == $tag and
+                   .version == $version and .upstream.commit == $sha' \
+                  "$draft_dir/build-info.json" >/dev/null
+              fi
             fi
             {
               echo "skip=false"
@@ -290,10 +389,19 @@ jobs:
           (cd "$dir" && sha256sum --check checksums.txt)
           jq -e --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" \
             --arg version "$VERSION" --arg sha "$SOURCE_SHA" \
+            --arg repo "$SOURCE_REPO" --arg ref "$SOURCE_REF" \
+            --arg base_repo "$UPSTREAM_BASE_REPO" --arg base_ref "$UPSTREAM_BASE_REF" \
+            --arg base_sha "$UPSTREAM_BASE_SHA" \
             --arg archive "$ARCHIVE" --arg method "$METHOD" \
             '.schema_version == 1 and .channel == $channel and
              .release_tag == $tag and .version == $version and
-             .upstream.commit == $sha and .platform.os == "linux" and
+             (if $channel == "dbby" then
+                .source.repository == $repo and .source.ref == $ref and
+                .source.commit == $sha and
+                .upstream_base.repository == $base_repo and
+                .upstream_base.ref == $base_ref and .upstream_base.commit == $base_sha
+              else .upstream.commit == $sha end) and
+             .platform.os == "linux" and
              .platform.architecture == "amd64" and .build.method == $method and
              .archive.name == $archive and
              (if $channel == "stable" then
@@ -319,13 +427,20 @@ jobs:
           cache-dependency-path: upstream/go.sum
 
       - name: Run upstream build and tests
-        if: matrix.target.channel != 'stable' && steps.existing.outputs.skip != 'true'
+        if: matrix.target.channel != 'stable' && matrix.target.channel != 'dbby' && steps.existing.outputs.skip != 'true'
         working-directory: upstream
         run: |
           set -euo pipefail
           git submodule update --init --recursive
           go build -v ./...
           go test -race -benchmem -bench=. ./... -benchtime=100ms
+
+      - name: Run fork release regression review packet
+        if: matrix.target.channel == 'dbby' && steps.existing.outputs.skip != 'true'
+        working-directory: upstream
+        env:
+          GO_BIN: go
+        run: ./scripts/review-packet-websocket.sh
 
       - name: Download and verify stable upstream archive
         if: matrix.target.channel == 'stable' && steps.existing.outputs.skip != 'true'
@@ -372,7 +487,7 @@ jobs:
         env:
           CHANNEL: ${{ matrix.target.channel }}
           RELEASE_TAG: ${{ matrix.target.tag }}
-          UPSTREAM_REF: ${{ matrix.target.ref }}
+          SOURCE_REF: ${{ matrix.target.ref }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
           SOURCE_DATE: ${{ steps.source.outputs.source_date }}
           SOURCE_EPOCH: ${{ steps.source.outputs.epoch }}
@@ -380,6 +495,10 @@ jobs:
           ARCHIVE: ${{ steps.source.outputs.archive }}
           METHOD: ${{ steps.source.outputs.method }}
           GO_VERSION: ${{ steps.source.outputs.go_version }}
+          SOURCE_REPO: ${{ steps.source.outputs.source_repo }}
+          UPSTREAM_BASE_REPO: ${{ steps.source.outputs.upstream_base_repo }}
+          UPSTREAM_BASE_REF: ${{ steps.source.outputs.upstream_base_ref }}
+          UPSTREAM_BASE_SHA: ${{ steps.source.outputs.upstream_base_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -423,15 +542,25 @@ jobs:
           if [ "$CHANNEL" = stable ]; then test "$archive_sha" = "$UPSTREAM_ASSET_SHA256"; fi
           jq -n \
             --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" --arg version "$VERSION" \
-            --arg ref "$UPSTREAM_REF" --arg sha "$SOURCE_SHA" --arg date "$SOURCE_DATE" \
+            --arg ref "$SOURCE_REF" --arg sha "$SOURCE_SHA" --arg date "$SOURCE_DATE" \
+            --arg source_repo "$SOURCE_REPO" \
+            --arg upstream_base_repo "$UPSTREAM_BASE_REPO" \
+            --arg upstream_base_ref "$UPSTREAM_BASE_REF" \
+            --arg upstream_base_sha "$UPSTREAM_BASE_SHA" \
             --arg wrapper "$GITHUB_REPOSITORY" --arg wrapper_sha "$GITHUB_SHA" \
             --arg method "$METHOD" --arg go "$GO_VERSION" --arg archive "$ARCHIVE" \
             --arg archive_sha "$archive_sha" --arg upstream_sha "$UPSTREAM_ASSET_SHA256" \
             '{
               schema_version: 1, channel: $channel, release_tag: $tag, version: $version,
               platform: {os:"linux", architecture:"amd64"},
-              upstream: {repository:"OutlineFoundation/tunnel-server", ref:$ref,
+              upstream: {repository:$source_repo, ref:$ref,
                          commit:$sha, commit_date_utc:$date},
+              source: {repository:$source_repo, ref:$ref,
+                       commit:$sha, commit_date_utc:$date},
+              upstream_base:(if $channel == "dbby" then
+                {repository:$upstream_base_repo, ref:$upstream_base_ref,
+                 commit:$upstream_base_sha}
+                else null end),
               wrapper: {repository:$wrapper, commit:$wrapper_sha},
               build: {method:$method,
                      go_version:(if $go == "" then null else $go end),
@@ -454,6 +583,11 @@ jobs:
           CHANNEL: ${{ matrix.target.channel }}
           RELEASE_TAG: ${{ matrix.target.tag }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_REPO: ${{ steps.source.outputs.source_repo }}
+          SOURCE_REF: ${{ matrix.target.ref }}
+          UPSTREAM_BASE_REPO: ${{ steps.source.outputs.upstream_base_repo }}
+          UPSTREAM_BASE_REF: ${{ steps.source.outputs.upstream_base_ref }}
+          UPSTREAM_BASE_SHA: ${{ steps.source.outputs.upstream_base_sha }}
           LATEST: ${{ steps.source.outputs.latest }}
           ARCHIVE: ${{ steps.source.outputs.archive }}
           DRAFT_ID: ${{ steps.existing.outputs.release_id }}
@@ -462,8 +596,13 @@ jobs:
           set -euo pipefail
           dir="$RUNNER_TEMP/outline-binary-$GITHUB_RUN_ID"
           notes="$dir/release-notes.md"
-          printf 'Standalone Linux amd64 Outline tunnel-server binary.\n\nChannel: %s\nUpstream source commit: https://github.com/OutlineFoundation/tunnel-server/commit/%s\nThe checksums.txt asset covers the archive and build-info.json.\n' \
-            "$CHANNEL" "$SOURCE_SHA" > "$notes"
+          printf 'Standalone Linux amd64 Outline tunnel-server binary.\n\nChannel: %s\nSource commit: https://github.com/%s/commit/%s\n' \
+            "$CHANNEL" "$SOURCE_REPO" "$SOURCE_SHA" > "$notes"
+          if [ "$CHANNEL" = dbby ]; then
+            printf 'Upstream base tag: %s (https://github.com/%s/commit/%s)\n' \
+              "$UPSTREAM_BASE_REF" "$UPSTREAM_BASE_REPO" "$UPSTREAM_BASE_SHA" >> "$notes"
+          fi
+          printf 'The checksums.txt asset covers the archive and build-info.json.\n' >> "$notes"
           if [ -n "$DRAFT_ID" ]; then
             route="/repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID"
             release="$(gh api "$route")"
@@ -526,6 +665,11 @@ jobs:
           CHANNEL: ${{ matrix.target.channel }}
           RELEASE_TAG: ${{ matrix.target.tag }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_REPO: ${{ steps.source.outputs.source_repo }}
+          SOURCE_REF: ${{ matrix.target.ref }}
+          UPSTREAM_BASE_REPO: ${{ steps.source.outputs.upstream_base_repo }}
+          UPSTREAM_BASE_REF: ${{ steps.source.outputs.upstream_base_ref }}
+          UPSTREAM_BASE_SHA: ${{ steps.source.outputs.upstream_base_sha }}
           VERSION: ${{ steps.source.outputs.version }}
           ARCHIVE: ${{ steps.source.outputs.archive }}
           LATEST: ${{ steps.source.outputs.latest }}
@@ -541,8 +685,17 @@ jobs:
           (cd "$dir" && sha256sum --check checksums.txt)
           jq -e --arg channel "$CHANNEL" --arg tag "$RELEASE_TAG" \
             --arg version "$VERSION" --arg sha "$SOURCE_SHA" \
+            --arg repo "$SOURCE_REPO" --arg ref "$SOURCE_REF" \
+            --arg base_repo "$UPSTREAM_BASE_REPO" --arg base_ref "$UPSTREAM_BASE_REF" \
+            --arg base_sha "$UPSTREAM_BASE_SHA" \
             '.channel == $channel and .release_tag == $tag and
-             .version == $version and .upstream.commit == $sha and
+             .version == $version and
+             (if $channel == "dbby" then
+                .source.repository == $repo and .source.ref == $ref and
+                .source.commit == $sha and
+                .upstream_base.repository == $base_repo and
+                .upstream_base.ref == $base_ref and .upstream_base.commit == $base_sha
+              else .upstream.commit == $sha end) and
              .platform.os == "linux" and .platform.architecture == "amd64" and
              .archive.sha256 != "" and
              (if $channel == "stable" then

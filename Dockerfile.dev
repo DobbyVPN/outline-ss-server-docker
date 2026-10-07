@@ -22,13 +22,19 @@ RUN set -eu; \
 FROM alpine:3.19
 
 ARG IMAGE_VERSION WRAPPER_SHA UPSTREAM_SHA UPSTREAM_DATE
+ARG IMAGE_SOURCE="https://github.com/DobbyVPN/outline-tunnel-server"
+ARG IMAGE_REVISION=$WRAPPER_SHA
+ARG UPSTREAM_BASE_SOURCE="https://github.com/OutlineFoundation/tunnel-server"
+ARG UPSTREAM_BASE_REVISION=$UPSTREAM_SHA
 
-LABEL org.opencontainers.image.source="https://github.com/DobbyVPN/outline-tunnel-server" \
-      org.opencontainers.image.revision="$WRAPPER_SHA" \
+LABEL org.opencontainers.image.source="$IMAGE_SOURCE" \
+      org.opencontainers.image.revision="$IMAGE_REVISION" \
       org.opencontainers.image.version="$IMAGE_VERSION" \
       com.dobbyvpn.outline.upstream-source="https://github.com/OutlineFoundation/tunnel-server" \
       com.dobbyvpn.outline.upstream-revision="$UPSTREAM_SHA" \
-      com.dobbyvpn.outline.upstream-commit-date="$UPSTREAM_DATE"
+      com.dobbyvpn.outline.upstream-commit-date="$UPSTREAM_DATE" \
+      com.dobbyvpn.outline.upstream-base-source="$UPSTREAM_BASE_SOURCE" \
+      com.dobbyvpn.outline.upstream-base-revision="$UPSTREAM_BASE_REVISION"
 
 COPY --from=build /out/outline-ss-server /outline-ss-server
 ENTRYPOINT ["/outline-ss-server"]

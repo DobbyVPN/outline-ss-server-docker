@@ -8,6 +8,43 @@ that path but do not reliably apply a separately configured Docker command to
 prebuilt images. Supplying arguments to `docker run` replaces the default
 `CMD` while preserving the `/outline-ss-server` entrypoint.
 
+## DobbyVPN fork builds
+
+This repository publishes both official upstream builds and the server from
+[DobbyVPN/outliner-tunnel-server-fork](https://github.com/DobbyVPN/outliner-tunnel-server-fork).
+The fork's release tags end in `-dbby`, starting with `v1.9.2-dbby`.
+Both its executable version and its published artifacts carry that suffix.
+
+| Build | Native release tag | Container image tag | Moving image alias |
+| --- | --- | --- | --- |
+| Official upstream | `v1.9.2` | `v1.9.2` | `latest` |
+| DobbyVPN fork | `v1.9.2-dbby` | `v1.9.2-dbby` | `latest-dbby` |
+
+The fork is built from an exact tag in the source repository's `dbby` branch.
+The binary workflow's `dbby` channel publishes Linux amd64 archives such as
+`outline-ss-server_1.9.2-dbby_linux_x86_64.tar.gz`, along with checksums and
+source provenance, to this repository's GitHub Releases. The dbby image
+workflow builds Linux amd64, arm64, arm/v7, and arm/v6 images from that same
+source tag and publishes them under `ghcr.io/dobbyvpn/outline-ss-server`.
+
+The dbby binary schedule runs at 06:00 UTC and the image schedule at 06:30 UTC.
+Both workflows can also be dispatched manually with an exact fork release tag.
+An empty binary ref discovers all `vX.Y.Z-dbby` tags; an empty image ref selects
+the newest one. Version tags and release
+assets are immutable. The fork's `latest-dbby` image alias advances independently
+of the official `latest` alias, and official stable remains the latest GitHub
+Release.
+
+For example:
+
+```sh
+docker pull ghcr.io/dobbyvpn/outline-ss-server:v1.9.2-dbby
+```
+
+The fork retains the `outline-ss-server` executable and existing configuration
+identities. Its TLS certificate files are supplied by an external handler;
+see the fork's [packet WebSocket and certificate documentation](https://github.com/DobbyVPN/outliner-tunnel-server-fork/blob/v1.9.2-dbby/docs/dobbyvpn-packet-websocket.md).
+
 ## Standalone binary releases
 
 The native binary workflow publishes GitHub Releases alongside the container images. It currently targets Linux amd64 and emits an upstream-compatible archive, checksums.txt, and build-info.json.
@@ -32,6 +69,7 @@ Published assets are never replaced: reruns validate an existing release and sto
   `master` uses an immutable tag in the form
   `:dev-YYMonDD-<12-character-commit>`, using the commit's UTC date.
 
-`latest` is the only moving tag and always refers to a stable release. The
-development and prerelease workflows publish named tags only. Publishing an
-image does not update running servers.
+`latest` is the moving upstream tag and always refers to a stable upstream
+release. The fork has its own `latest-dbby` alias. The development and prerelease
+workflows publish named tags only. Publishing an image does not update running
+servers.

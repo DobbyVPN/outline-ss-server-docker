@@ -1,0 +1,455 @@
+name: Dobby fork stable Docker image
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Optional exact fork release tag (default: newest *-dbby tag)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: outline-ss-server-dbby-image
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      has_target: ${{ steps.resolve.outputs.has_target }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      latest: ${{ steps.resolve.outputs.latest }}
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+    steps:
+      - name: Resolve an exact fork release tag
+        id: resolve
+        env:
+          REQUESTED_REF: ${{ github.event.inputs.ref || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          repository = "https://github.com/DobbyVPN/outliner-tunnel-server-fork.git"
+          tag_pattern = re.compile(
+              r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dbby$"
+          )
+          requested = os.environ.get("REQUESTED_REF", "").strip()
+          if requested and not requested.startswith("v"):
+              requested = "v" + requested
+
+          def tagged_commits(remote):
+              listing = subprocess.run(
+                  ["git", "ls-remote", "--tags", remote],
+                  text=True,
+                  capture_output=True,
+                  check=True,
+              )
+              direct_refs = {}
+              peeled_refs = {}
+              for line in listing.stdout.splitlines():
+                  fields = line.split("\t", 1)
+                  if len(fields) != 2 or not fields[1].startswith("refs/tags/"):
+                      continue
+                  sha, ref = fields
+                  if ref.endswith("^{}"):
+                      name = ref.removesuffix("^{}").removeprefix("refs/tags/")
+                      peeled_refs[name] = sha
+                  else:
+                      direct_refs[ref.removeprefix("refs/tags/")] = sha
+              return {
+                  tag: peeled_refs.get(tag, direct_sha)
+                  for tag, direct_sha in direct_refs.items()
+              }
+
+          tag_commits = {}
+          versions = {}
+          for tag, sha in tagged_commits(repository).items():
+              match = tag_pattern.fullmatch(tag)
+              if match:
+                  tag_commits[tag] = sha
+                  versions[tag] = tuple(map(int, match.groups()))
+
+          if requested:
+              if not tag_pattern.fullmatch(requested):
+                  raise SystemExit(f"Not a Dobby fork release tag: {requested}")
+              if requested not in tag_commits:
+                  raise SystemExit(f"Dobby fork tag does not exist: {requested}")
+              selected = requested
+          elif versions:
+              selected = max(versions, key=lambda tag: versions[tag])
+          else:
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write("has_target=false\n")
+              print("No fork release tags ending in -dbby were found; skipping.")
+              raise SystemExit(0)
+
+          newest = max(versions, key=lambda tag: versions[tag])
+          sha = tag_commits[selected]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit(f"Tag {selected} did not resolve to a full commit SHA")
+          base_ref = selected.removesuffix("-dbby")
+          upstream_tags = tagged_commits(
+              "https://github.com/OutlineFoundation/tunnel-server.git"
+          )
+          if base_ref not in upstream_tags:
+              raise SystemExit(f"Matching upstream base tag does not exist: {base_ref}")
+          base_sha = upstream_tags[base_ref]
+          if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+              raise SystemExit(f"Upstream base tag {base_ref} did not resolve to a full commit SHA")
+          values = {
+              "has_target": "true",
+              "tag": selected,
+              "sha": sha,
+              "version": selected.removeprefix("v"),
+              "latest": str(selected == newest).lower(),
+              "base_ref": base_ref,
+              "base_sha": base_sha,
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          print(f"fork_release_tag={selected}")
+          print(f"fork_source_commit={sha}")
+          print(f"is_newest_fork_release={values['latest']}")
+          print(f"upstream_base_tag={base_ref}")
+          print(f"upstream_base_commit={base_sha}")
+          PY
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.has_target == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE_BASE: ghcr.io/dobbyvpn/outline-ss-server
+      FORK_SOURCE: https://github.com/DobbyVPN/outliner-tunnel-server-fork
+      UPSTREAM_BASE_SOURCE: https://github.com/OutlineFoundation/tunnel-server
+    steps:
+      - name: Checkout image build repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout the exact tagged fork source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: DobbyVPN/outliner-tunnel-server-fork
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: upstream
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify tagged source and upstream base
+        id: source
+        env:
+          EXPECTED_TAG: ${{ needs.resolve.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          EXPECTED_BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          EXPECTED_BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          IMAGE_VERSION: ${{ needs.resolve.outputs.tag }}
+          BINARY_VERSION: ${{ needs.resolve.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C upstream rev-parse HEAD)"
+          tag_sha="$(git -C upstream rev-parse "refs/tags/$EXPECTED_TAG^{commit}")"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          test "$tag_sha" = "$EXPECTED_SHA"
+          git -C upstream merge-base --is-ancestor "$EXPECTED_BASE_SHA" "$actual_sha" || {
+            echo "Fork tag is not based on the matching upstream commit $EXPECTED_BASE_SHA" >&2
+            exit 1
+          }
+
+          source_epoch="$(git -C upstream show -s --format=%ct "$actual_sha")"
+          base_epoch="$(git -C upstream show -s --format=%ct "$EXPECTED_BASE_SHA")"
+          source_date="$(date -u -d "@$source_epoch" '+%F')"
+          base_date="$(date -u -d "@$base_epoch" '+%F')"
+          go_version="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          directives = {}
+          for line in Path("upstream/go.mod").read_text().splitlines():
+              fields = line.split()
+              if fields and fields[0] in {"go", "toolchain"}:
+                  directives[fields[0]] = fields[1]
+
+          def parse(value):
+              version = value.removeprefix("go")
+              if not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version):
+                  raise SystemExit(f"unsupported Go version: {value!r}")
+              parts = tuple(map(int, version.split(".")))
+              return parts + (0,) * (3 - len(parts))
+
+          candidates = [(1, 24, 8)]
+          candidates.extend(parse(value) for value in directives.values())
+          print(".".join(map(str, max(candidates))))
+          PY
+          )"
+          {
+            echo "sha=$actual_sha"
+            echo "source_date=$source_date"
+            echo "base_date=$base_date"
+            echo "base_ref=$EXPECTED_BASE_REF"
+            echo "base_sha=$EXPECTED_BASE_SHA"
+            echo "go_version=$go_version"
+            echo "version=$IMAGE_VERSION"
+            echo "binary_version=$BINARY_VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "fork_tag=$EXPECTED_TAG"
+          echo "fork_commit=$actual_sha"
+          echo "fork_commit_date_utc=$source_date"
+          echo "upstream_base_tag=$EXPECTED_BASE_REF"
+          echo "upstream_base_commit=$EXPECTED_BASE_SHA"
+          echo "upstream_base_commit_date_utc=$base_date"
+          echo "go_version=$go_version"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Check immutable fork image tag
+        id: existing
+        env:
+          IMAGE_TAG: ${{ needs.resolve.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="$IMAGE_BASE:$IMAGE_TAG"
+          error_file="$RUNNER_TEMP/fork-image-inspect.err"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>"$error_file"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Existing immutable image found: $image"
+          elif grep -Eqi 'manifest unknown|no such manifest|not found' "$error_file"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            cat "$error_file" >&2
+            exit 1
+          fi
+
+      - name: Build and publish immutable fork image
+        id: publish
+        if: steps.existing.outputs.exists == 'false'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile.dev
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+          push: true
+          tags: ${{ env.IMAGE_BASE }}:${{ needs.resolve.outputs.tag }}
+          build-args: |
+            GO_VERSION=${{ steps.source.outputs.go_version }}
+            BINARY_VERSION=${{ needs.resolve.outputs.version }}
+            IMAGE_VERSION=${{ needs.resolve.outputs.tag }}
+            WRAPPER_SHA=${{ github.sha }}
+            UPSTREAM_SHA=${{ needs.resolve.outputs.base_sha }}
+            UPSTREAM_DATE=${{ steps.source.outputs.base_date }}
+            IMAGE_SOURCE=${{ env.FORK_SOURCE }}
+            IMAGE_REVISION=${{ steps.source.outputs.sha }}
+            UPSTREAM_BASE_SOURCE=${{ env.UPSTREAM_BASE_SOURCE }}
+            UPSTREAM_BASE_REVISION=${{ needs.resolve.outputs.base_sha }}
+
+      - name: Select immutable image digest
+        id: image
+        env:
+          IMAGE_TAG: ${{ needs.resolve.outputs.tag }}
+          ALREADY_EXISTS: ${{ steps.existing.outputs.exists }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$ALREADY_EXISTS" = true ]; then
+            image_ref="$IMAGE_BASE:$IMAGE_TAG"
+          else
+            if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Build did not return a valid image digest" >&2
+              exit 1
+            fi
+            image_ref="$IMAGE_BASE@$DIGEST"
+          fi
+          echo "ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "image_ref=$image_ref"
+
+      - name: Verify image provenance, architectures, version, and defaults
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          IMAGE_TAG: ${{ needs.resolve.outputs.tag }}
+          BINARY_VERSION: ${{ needs.resolve.outputs.version }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_DATE: ${{ steps.source.outputs.source_date }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          BASE_DATE: ${{ steps.source.outputs.base_date }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$IMAGE_REF"
+          docker buildx imagetools inspect --raw "$IMAGE_REF" > "$RUNNER_TEMP/fork-image-index.json"
+          python3 - "$IMAGE_REF" "$RUNNER_TEMP/fork-image-index.json" <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          image_ref, manifest_path = sys.argv[1:]
+          image_data = json.loads(subprocess.check_output(
+              ["docker", "image", "inspect", image_ref], text=True
+          ))
+          if len(image_data) != 1:
+              raise SystemExit("published image inspection was not singular")
+          config = image_data[0].get("Config") or {}
+          expected_entrypoint = ["/outline-ss-server"]
+          expected_cmd = ["-config=/etc/secrets/config.yml"]
+          if config.get("Entrypoint") != expected_entrypoint:
+              raise SystemExit("published image entrypoint is incorrect")
+          if config.get("Cmd") != expected_cmd:
+              raise SystemExit("published image default config command is incorrect")
+
+          labels = config.get("Labels") or {}
+          expected_labels = {
+              "org.opencontainers.image.source": "https://github.com/DobbyVPN/outliner-tunnel-server-fork",
+          }
+          # Read expected metadata from the workflow environment.
+          import os
+          expected_labels.update({
+              "org.opencontainers.image.revision": os.environ["SOURCE_SHA"],
+              "org.opencontainers.image.version": os.environ["IMAGE_TAG"],
+              "com.dobbyvpn.outline.upstream-source": "https://github.com/OutlineFoundation/tunnel-server",
+              "com.dobbyvpn.outline.upstream-revision": os.environ["BASE_SHA"],
+              "com.dobbyvpn.outline.upstream-commit-date": os.environ["BASE_DATE"],
+              "com.dobbyvpn.outline.upstream-base-source": "https://github.com/OutlineFoundation/tunnel-server",
+              "com.dobbyvpn.outline.upstream-base-revision": os.environ["BASE_SHA"],
+          })
+          for key, expected in expected_labels.items():
+              actual = labels.get(key)
+              if actual != expected:
+                  raise SystemExit(f"image label {key} is {actual!r}, expected {expected!r}")
+
+          manifest = json.load(open(manifest_path, encoding="utf-8"))
+          descriptors = manifest.get("manifests")
+          if not isinstance(descriptors, list):
+              raise SystemExit("published image is not a multi-platform manifest index")
+          platforms = set()
+          for descriptor in descriptors:
+              platform = descriptor.get("platform") or {}
+              if platform.get("os") != "linux":
+                  continue
+              architecture = platform.get("architecture")
+              variant = platform.get("variant", "")
+              if architecture == "arm64":
+                  platforms.add("linux/arm64")
+              elif architecture == "arm" and variant in {"v6", "v7"}:
+                  platforms.add(f"linux/arm/{variant}")
+              elif architecture:
+                  platforms.add(f"linux/{architecture}")
+          required = {
+              "linux/amd64",
+              "linux/arm64",
+              "linux/arm/v7",
+              "linux/arm/v6",
+          }
+          if not required.issubset(platforms):
+              raise SystemExit(f"published image is missing platforms: {sorted(required - platforms)}")
+          print("published_image_labels_architectures_and_defaults=verified")
+          PY
+
+          binary_version="$(docker run --rm --platform linux/amd64 --entrypoint /outline-ss-server "$IMAGE_REF" -version)"
+          test "$binary_version" = "$BINARY_VERSION"
+          echo "binary_version=$binary_version"
+
+          smoke_name="outline-dbby-smoke-${GITHUB_RUN_ID}"
+          smoke_config="$GITHUB_WORKSPACE/upstream/cmd/outline-ss-server/config_example.yml"
+          test -f "$smoke_config"
+          trap 'docker rm -f "$smoke_name" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$smoke_name" \
+            --mount "type=bind,src=$smoke_config,dst=/etc/secrets/config.yml,readonly" \
+            "$IMAGE_REF"
+
+          ready=false
+          for attempt in $(seq 1 15); do
+            running="$(docker inspect --format='{{.State.Running}}' "$smoke_name" 2>/dev/null || echo false)"
+            if [ "$running" != true ]; then
+              docker logs "$smoke_name" || true
+              echo "fork image exited before starting its configured listeners" >&2
+              exit 1
+            fi
+            logs="$(docker logs "$smoke_name" 2>&1 || true)"
+            if grep -Fq 'Web server started.' <<< "$logs" && \
+               grep -Fq 'TCP service started.' <<< "$logs" && \
+               grep -Fq 'UDP service started.' <<< "$logs"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          docker logs "$smoke_name"
+          if [ "$ready" != true ]; then
+            echo "fork image did not report all configured listeners started" >&2
+            exit 1
+          fi
+          echo "configured_listener_startup=verified"
+
+      - name: Move latest-dbby to the newest verified fork image
+        if: needs.resolve.outputs.latest == 'true'
+        env:
+          IMAGE_TAG: ${{ needs.resolve.outputs.tag }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$RUNNER_TEMP/fork-latest-source.json"
+          actual="$RUNNER_TEMP/fork-latest-alias.json"
+          docker buildx imagetools inspect --raw "$IMAGE_REF" > "$expected"
+          docker buildx imagetools create --tag "$IMAGE_BASE:latest-dbby" "$IMAGE_REF"
+          docker buildx imagetools inspect --raw "$IMAGE_BASE:latest-dbby" > "$actual"
+          python3 - "$expected" "$actual" <<'PY'
+          import json
+          import sys
+
+          def descriptors(path):
+              manifest = json.load(open(path, encoding="utf-8"))
+              values = manifest.get("manifests")
+              if not isinstance(values, list):
+                  raise SystemExit("fork image alias is not a multi-platform index")
+              return sorted(
+                  (
+                      item.get("digest"),
+                      (item.get("platform") or {}).get("os"),
+                      (item.get("platform") or {}).get("architecture"),
+                      (item.get("platform") or {}).get("variant", ""),
+                  )
+                  for item in values
+              )
+
+          if descriptors(sys.argv[1]) != descriptors(sys.argv[2]):
+              raise SystemExit("latest-dbby does not point to the verified release image")
+          print("latest_dbby_alias=verified")
+          PY
+          echo "image=$IMAGE_BASE:latest-dbby"
+          echo "source_tag=$IMAGE_TAG"
+
+      - name: Keep latest-dbby on the newest tag
+        if: needs.resolve.outputs.latest != 'true'
+        run: echo "${{ needs.resolve.outputs.tag }} is not the newest fork tag; latest-dbby was left unchanged."
