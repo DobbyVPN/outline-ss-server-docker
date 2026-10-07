@@ -401,19 +401,40 @@ info["recovery"] = {
 path.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 (cd "$out" && sha256sum "$ARCHIVE" build-info.json > checksums.txt)
+cp "$out/build-info.json" "$out/recovery/recovery-attempt-build-info.json"
 export GH_TOKEN GITHUB_REPOSITORY RELEASE_TAG BINARY_VERSION SOURCE_REPOSITORY SOURCE_TAG SOURCE_SHA
 export CADDY_VERSION CADDY_SHA IMAGE_REPOSITORY IMAGE_TAG PUBLISHED_IMAGE_DIGEST ARCHIVE
 
 cd "$producer_dir"
-GITHUB_SHA="$PRODUCER_SHA" ./scripts/publish-caddy-dbby-release.sh \
+GITHUB_SHA="$PRODUCER_SHA" "$recovery_tools/scripts/publish-caddy-dbby-release.sh" \
   2>&1 | tee "$logs/publish-release.log"
 tag_target="$(resolve_release_tag_target no)"
 if [[ "$tag_target" != "$PRODUCER_SHA" ]]; then
   echo "published release tag resolves to $tag_target; expected original producer commit $PRODUCER_SHA" >&2
   exit 1
 fi
-GITHUB_SHA="$PRODUCER_SHA" ./scripts/publish-caddy-dbby-release.sh --verify-only \
+GITHUB_SHA="$PRODUCER_SHA" "$recovery_tools/scripts/publish-caddy-dbby-release.sh" --verify-only \
   2>&1 | tee "$logs/verify-public-release.log"
+
+# Keep the immutable release's actual publisher metadata in final evidence,
+# including when this run resumes a draft or verifies an earlier publication.
+published_assets="$(mktemp -d "$logs/published-release-assets.XXXXXX")"
+gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$published_assets"
+(cd "$published_assets" && sha256sum --strict -c checksums.txt)
+cmp -s "$out/$ARCHIVE" "$published_assets/$ARCHIVE"
+python3 - "$out/build-info.json" "$published_assets/build-info.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+current, published = [json.loads(Path(path).read_text(encoding="utf-8")) for path in sys.argv[1:]]
+for info in (current, published):
+    info.pop("recovery", None)
+if current != published:
+    raise SystemExit("published provenance differs from the verified producer and image")
+PY
+cp "$published_assets/build-info.json" "$out/build-info.json"
+cp "$published_assets/checksums.txt" "$out/checksums.txt"
 
 # The moving alias changes only after the immutable image, all child platforms,
 # provenance, and public prerelease assets have passed verification.

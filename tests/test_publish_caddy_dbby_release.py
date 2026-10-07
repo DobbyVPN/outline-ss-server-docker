@@ -36,10 +36,33 @@ def read_release():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
+def read_releases():
+    releases = []
+    primary = read_release()
+    if primary is not None:
+        releases.append(primary)
+    extra_path = state / "extra-releases.json"
+    if extra_path.exists():
+        releases.extend(json.loads(extra_path.read_text(encoding="utf-8")))
+    return releases
+
+def release_by_id(release_id):
+    return next((item for item in read_releases() if str(item.get("id")) == str(release_id)), None)
+
 def save_release(release):
-    (state / "release.json").write_text(
-        json.dumps(release, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    primary_path = state / "release.json"
+    if not primary_path.exists() or str(read_release().get("id")) == str(release.get("id")):
+        primary_path.write_text(json.dumps(release, sort_keys=True) + "\n", encoding="utf-8")
+        return
+    extra_path = state / "extra-releases.json"
+    extras = json.loads(extra_path.read_text(encoding="utf-8")) if extra_path.exists() else []
+    for index, item in enumerate(extras):
+        if str(item.get("id")) == str(release.get("id")):
+            extras[index] = release
+            break
+    else:
+        extras.append(release)
+    extra_path.write_text(json.dumps(extras, sort_keys=True) + "\n", encoding="utf-8")
 
 def payload(argv):
     if "--input" not in argv:
@@ -51,18 +74,52 @@ if args and args[0] == "api":
     if "--method" in args:
         method = args[args.index("--method") + 1]
     route = next((part for part in args[1:] if part.startswith("/repos/")), "")
+    route_path = route.split("?", 1)[0].rstrip("/")
     if method == "GET":
-        release = read_release()
-        if release is None:
-            print("HTTP 404: Not Found", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(release))
-        log("api-get", route)
-        sys.exit(0)
+        if "/releases/tags/" in route_path:
+            tag = route_path.rsplit("/", 1)[-1]
+            # GitHub's tag lookup does not expose draft releases, even to an
+            # authenticated publisher. Draft discovery uses the releases list.
+            matches = [item for item in read_releases()
+                       if item.get("tag_name") == tag and not item.get("draft")]
+            if len(matches) != 1:
+                log("api-get-tag-miss", route)
+                print("HTTP 404: Not Found", file=sys.stderr)
+                sys.exit(1)
+            print(json.dumps(matches[0]))
+            log("api-get-tag", route)
+            sys.exit(0)
+        if route_path.endswith("/releases"):
+            releases = read_releases()
+            if "--jq" in args:
+                query = args[args.index("--jq") + 1]
+                import re
+                match = re.search(r'tag_name\s*==\s*["\']([^"\']+)["\']', query)
+                if match:
+                    releases = [item for item in releases if item.get("tag_name") == match.group(1)]
+                for release in releases:
+                    print(json.dumps(release))
+            elif "--slurp" in args:
+                print(json.dumps([releases]))
+            else:
+                print(json.dumps(releases))
+            log("api-list", route, "matches", len(releases))
+            sys.exit(0)
+        if "/releases/" in route_path:
+            release_id = route_path.rsplit("/", 1)[-1]
+            release = release_by_id(release_id)
+            if release is None:
+                print("HTTP 404: Not Found", file=sys.stderr)
+                sys.exit(1)
+            print(json.dumps(release))
+            log("api-get-id", route, "draft", release.get("draft"))
+            sys.exit(0)
+        print("HTTP 404: Not Found", file=sys.stderr)
+        sys.exit(1)
     if method == "POST":
         data = payload(args)
         release = {
-            "id": 101,
+            "id": max([int(item.get("id", 0)) for item in read_releases()] + [100]) + 1,
             "tag_name": data["tag_name"],
             "name": data["name"],
             "body": data["body"],
@@ -76,7 +133,7 @@ if args and args[0] == "api":
         log("api-post", route, "draft", release["draft"])
         sys.exit(0)
     if method == "PATCH":
-        release = read_release()
+        release = release_by_id(route_path.rsplit("/", 1)[-1])
         if release is None:
             print("HTTP 404: Not Found", file=sys.stderr)
             sys.exit(1)
@@ -91,7 +148,9 @@ if args and args[0] == "api":
 
 if len(args) >= 2 and args[0] == "release" and args[1] == "upload":
     tag = args[2]
-    release = read_release()
+    matches = [item for item in read_releases()
+               if item.get("tag_name") == tag and item.get("draft")]
+    release = matches[0] if len(matches) == 1 else None
     if release is None or not release["draft"]:
         raise SystemExit("fake gh permits uploads only to a draft release")
     files = []
@@ -114,7 +173,10 @@ if len(args) >= 2 and args[0] == "release" and args[1] == "upload":
 
 if len(args) >= 2 and args[0] == "release" and args[1] == "download":
     tag = args[2]
-    release = read_release()
+    # gh release download/upload resolve the draft by tag internally even
+    # though the REST GET /releases/tags/{tag} endpoint returns 404 for it.
+    matches = [item for item in read_releases() if item.get("tag_name") == tag]
+    release = matches[0] if len(matches) == 1 else None
     if release is None or release["tag_name"] != tag:
         raise SystemExit("fake release not found")
     dest = Path(args[args.index("--dir") + 1])
@@ -150,7 +212,7 @@ class PublishReleaseHelperTest(unittest.TestCase):
                 "PATH": f"{fake_bin}{os.pathsep}{self.env['PATH']}",
                 "FAKE_GH_STATE": str(self.state),
                 "GH_TOKEN": "mock-token",
-                "GITHUB_REPOSITORY": "DobbyVPN/dobby-platform",
+                "GITHUB_REPOSITORY": "DobbyVPN/outline-tunnel-server",
                 "GITHUB_SHA": "b" * 40,
                 "RELEASE_TAG": "caddy-v2.11.7-dbby",
                 "BINARY_VERSION": "v2.11.7-dbby",
@@ -191,7 +253,7 @@ class PublishReleaseHelperTest(unittest.TestCase):
             "caddy": {"version": self.env["CADDY_VERSION"], "commit": self.env["CADDY_SHA"]},
             "toolchain": {"go_version": "1.26.8"},
             "modules": [{"path": "example.org/module", "version": "v1.0.0"}],
-            "wrapper": {"repository": "DobbyVPN/dobby-platform", "commit": "b" * 40},
+            "wrapper": {"repository": "DobbyVPN/outline-tunnel-server", "commit": "b" * 40},
             "build": {"flags": ["-trimpath"]},
             "binary": {"sha256": self.sha(self.out / "caddy")},
             "archive": {
@@ -258,6 +320,10 @@ class PublishReleaseHelperTest(unittest.TestCase):
     def test_new_draft_is_verified_published_and_public_rerun_is_read_only(self) -> None:
         first = self._run_helper()
         self.assertEqual(first.returncode, 0, first.stdout)
+        operations_after_create = self._log()
+        self.assertTrue(any(line.startswith("api-get-tag-miss ") for line in operations_after_create))
+        self.assertTrue(any(line.startswith("api-list ") and line.endswith("matches 0") for line in operations_after_create))
+        self.assertTrue(any(line.startswith("api-post ") for line in operations_after_create))
         release = json.loads((self.state / "release.json").read_text(encoding="utf-8"))
         self.assertFalse(release["draft"])
         self.assertEqual(
@@ -286,6 +352,34 @@ class PublishReleaseHelperTest(unittest.TestCase):
         uploads = [line for line in self._log() if line.startswith("upload ")]
         self.assertEqual(len(uploads), 2)
         self.assertFalse(any(self.env["ARCHIVE"] in line for line in uploads))
+        operations = self._log()
+        self.assertTrue(any(line.startswith("api-get-tag-miss ") for line in operations))
+        self.assertTrue(any(line.startswith("api-list ") and line.endswith("matches 1") for line in operations))
+        self.assertGreaterEqual(
+            sum(line.startswith("api-get-id /repos/DobbyVPN/outline-tunnel-server/releases/101") for line in operations),
+            2,
+        )
+        self.assertFalse(any(line.startswith("api-post ") for line in operations))
+        self.assertTrue(any(line.startswith("api-patch /repos/DobbyVPN/outline-tunnel-server/releases/101") for line in operations))
+
+    def test_ambiguous_matching_drafts_are_rejected_without_mutation(self) -> None:
+        self._seed_draft(archive_bytes=(self.out / self.env["ARCHIVE"]).read_bytes())
+        duplicate = json.loads((self.state / "release.json").read_text(encoding="utf-8"))
+        duplicate["id"] = 102
+        (self.state / "extra-releases.json").write_text(
+            json.dumps([duplicate], sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+        result = self._run_helper()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("multiple releases have the pinned tag", result.stdout)
+        operations = self._log()
+        self.assertTrue(any(line.startswith("api-get-tag-miss ") for line in operations))
+        self.assertTrue(any(line.startswith("api-list ") and line.endswith("matches 2") for line in operations))
+        self.assertFalse(any(line.startswith("api-get-id ") for line in operations))
+        self.assertFalse(any(line.startswith("api-post ") for line in operations))
+        self.assertFalse(any(line.startswith("upload ") for line in operations))
+        self.assertFalse(any(line.startswith("api-patch ") for line in operations))
 
     def test_mismatched_draft_archive_is_rejected_without_upload_or_publish(self) -> None:
         self._seed_draft(archive_bytes=b"different archive\n")
