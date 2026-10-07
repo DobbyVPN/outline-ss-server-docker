@@ -94,7 +94,8 @@ and arm/v6. The release contains
 `caddy_2.11.7-dbby_linux_amd64.tar.gz`, `checksums.txt`, and `build-info.json`.
 GitHub receives `make_latest=false`; publication downloads and verifies the
 release assets before moving only the `latest-dbby` image alias, then checks
-that the official GitHub latest release and GHCR `latest` image did not change.
+that the official GitHub latest release and
+`ghcr.io/dobbyvpn/outline-ss-server:latest` image did not change.
 The workflow stops after release and image publication; it does not deploy or
 restart a running service.
 

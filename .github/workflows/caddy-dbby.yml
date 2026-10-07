@@ -432,6 +432,8 @@ jobs:
     if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    env:
+      OFFICIAL_LATEST_IMAGE_REFERENCE: ghcr.io/dobbyvpn/outline-ss-server:latest
     permissions:
       actions: read
       contents: write
@@ -627,9 +629,9 @@ jobs:
             cat out/logs/official-latest-release-before.err >&2
             exit 1
           fi
-          if docker buildx imagetools inspect --raw "$IMAGE_REPOSITORY:latest" \
+          if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
             >out/logs/official-latest-image-before.json 2>out/logs/official-latest-image-before.err; then
-            official_image="$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" \
+            official_image="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
               | awk '$1 == "Digest:" { print $2; exit }')"
             if [[ ! "$official_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "official latest image did not resolve to a full digest" >&2
@@ -866,9 +868,9 @@ jobs:
             echo "official latest GitHub release changed from $OFFICIAL_LATEST_RELEASE_TAG to $official_release_after" >&2
             exit 1
           fi
-          if docker buildx imagetools inspect --raw "$IMAGE_REPOSITORY:latest" \
+          if docker buildx imagetools inspect --raw "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
             >out/logs/official-latest-image-after.json 2>out/logs/official-latest-image-after.err; then
-            official_image_after="$(docker buildx imagetools inspect "$IMAGE_REPOSITORY:latest" \
+            official_image_after="$(docker buildx imagetools inspect "$OFFICIAL_LATEST_IMAGE_REFERENCE" \
               | awk '$1 == "Digest:" { print $2; exit }')"
           elif grep -Eiq 'not found|manifest unknown|no such manifest' out/logs/official-latest-image-after.err; then
             official_image_after=absent
