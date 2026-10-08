@@ -1,8 +1,6 @@
 name: Dobby fork stable Docker image
 
 on:
-  schedule:
-    - cron: '30 6 * * *'
   workflow_dispatch:
     inputs:
       ref:
