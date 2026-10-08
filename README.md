@@ -20,20 +20,23 @@ Both its executable version and its published artifacts carry that suffix.
 | Official upstream | `v1.9.2` | `v1.9.2` | `latest` |
 | DobbyVPN fork | `v1.9.2-dbby` | `v1.9.2-dbby` | `latest-dbby` |
 
-The fork is built from an exact tag in the source repository's `dbby` branch.
-The binary workflow's `dbby` channel publishes Linux amd64 archives such as
+The fork was built from exact tags in the source repository's `dbby` branch.
+The standalone fork is frozen: its scheduled binary and image builds are
+disabled. Manual `dbby` binary and image builds remain available, and published
+artifacts are retained for rollback. The binary workflow's `dbby` channel
+publishes Linux amd64 archives such as
 `outline-ss-server_1.9.2-dbby_linux_x86_64.tar.gz`, along with checksums and
 source provenance, to this repository's GitHub Releases. The dbby image
 workflow builds Linux amd64, arm64, arm/v7, and arm/v6 images from that same
 source tag and publishes them under `ghcr.io/dobbyvpn/outline-ss-server`.
 
-The dbby binary schedule runs at 06:00 UTC and the image schedule at 06:30 UTC.
-Both workflows can also be dispatched manually with an exact fork release tag.
-An empty binary ref discovers all `vX.Y.Z-dbby` tags; an empty image ref selects
-the newest one. Version tags and release
-assets are immutable. The fork's `latest-dbby` image alias advances independently
-of the official `latest` alias, and official stable remains the latest GitHub
-Release.
+Both workflows can be dispatched manually with an exact fork release tag. An
+empty binary ref discovers all `vX.Y.Z-dbby` tags; an empty image ref selects
+the newest one. Version tags and release assets are immutable. The fork's
+`latest-dbby` image alias advances independently of the official `latest` alias,
+and official stable remains the latest GitHub Release. Active custom development
+is in `dbby-caddy`; live NSPT still needs to migrate before the old standalone
+service can be retired.
 
 For example:
 
@@ -99,17 +102,18 @@ that the official GitHub latest release and
 The workflow stops after release and image publication; it does not deploy or
 restart a running service.
 
-The separate **Recover verified Outline Caddy publication** workflow is a
-one-time recovery for the already verified producer run `37661966790` at
-wrapper commit `b7ecd468a6a82a63c1a65a416e8d2f0a1e184896`. Dispatch it from
-`main` only after reviewing the pinned recovery lock. It downloads that run's
-artifact, verifies its producer job, artifact digest, source tag, binary,
-archive, OCI preview, module origins, and four published image platforms; it
-does not rebuild the image or overwrite the immutable version tag. It records
-the original producer and recovery publisher identities in final provenance,
-then completes the prerelease and `latest-dbby` alias only if the locked
-official latest release and server image still match their recorded values.
-It also stops before deployment or service restart.
+The initial `caddy-v2.11.7-dbby` publication completed in this
+[GitHub Actions run](https://github.com/DobbyVPN/outline-tunnel-server/actions/runs/37669868652).
+
+The published `v2.11.7-dbby` uses plugin source based on upstream commit
+`2e9909e67173`, but its nested Go dependency still pins Outline core to
+`v1.9.3-rc2`. Before migration, repin it to
+upstream commit `2e9909e67173be0275d25a381cc5555e0e56d9af`
+(`v1.9.3-rc2.0.20260904072137-2e9909e67173`), validate it, and publish a new
+immutable `dbby` version. This Caddy build has not been deployed. After migration,
+one Caddy process will handle TLS/ACME, Outline WebSocket traffic, and
+static/account content, replacing guest HAProxy, the standalone service, and the
+certificate-copy timer; ingress/NAT remains.
 
 The locked build uses Go 1.26.8, Caddy v2.11.7, and the exact module and base
 image revisions in the lock file. Local source regression review requires Go
@@ -123,7 +127,7 @@ Run the release-helper state-machine tests and shell syntax checks locally:
 ```sh
 python3 -m unittest discover -s tests -v
 for script in scripts/*.sh; do bash -n "$script"; done
-actionlint .github/workflows/caddy-dbby.yml .github/workflows/recover-caddy-dbby-publication.yml
+actionlint .github/workflows/caddy-dbby.yml
 ```
 
 The source regression command used by CI is run from the checked-out source
