@@ -10,7 +10,7 @@ source_dir="$(cd "$1" && pwd -P)"
 binary="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
 out_dir="$3"
 source_epoch="$4"
-version="${BINARY_VERSION:-v2.11.7-dbby}"
+version="${BINARY_VERSION:-v2.11.7-r2-dbby}"
 version_no_v="${version#v}"
 archive="caddy_${version_no_v}_linux_amd64.tar.gz"
 

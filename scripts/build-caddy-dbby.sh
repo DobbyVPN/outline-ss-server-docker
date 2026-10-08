@@ -63,8 +63,8 @@ test -f "$source_dir/LICENSE"
 
 expected_go_version=${EXPECTED_GO_VERSION:-1.26.8}
 expected_caddy_version=${EXPECTED_CADDY_VERSION:-v2.11.7}
-expected_server_version=${EXPECTED_OUTLINE_SERVER_VERSION:-v1.9.3-rc2}
-binary_version=${BINARY_VERSION:-v2.11.7-dbby}
+expected_server_version=${EXPECTED_OUTLINE_SERVER_VERSION:-v1.9.3-rc2.0.20260904072137-2e9909e67173}
+binary_version=${BINARY_VERSION:-v2.11.7-r2-dbby}
 
 actual_go_version=$(go version | awk '{print $3}' | sed 's/^go//')
 if [ "$actual_go_version" != "$expected_go_version" ]; then

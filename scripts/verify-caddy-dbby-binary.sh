@@ -33,7 +33,7 @@ done
 
 go_info="$(go version -m "$binary")"
 grep -Eq '^[[:space:]]*dep[[:space:]]+github\.com/caddyserver/caddy/v2[[:space:]]+v2\.11\.7([[:space:]]|$)' <<<"$go_info"
-grep -Eq '^[[:space:]]*dep[[:space:]]+golang\.getoutline\.org/tunnel-server[[:space:]]+v1\.9\.3-rc2([[:space:]]|$)' <<<"$go_info"
+grep -Eq '^[[:space:]]*dep[[:space:]]+golang\.getoutline\.org/tunnel-server[[:space:]]+v1\.9\.3-rc2\.0\.20260904072137-2e9909e67173([[:space:]]|$)' <<<"$go_info"
 grep -Eq '^[[:space:]]*dep[[:space:]]+golang\.getoutline\.org/sdk[[:space:]]+v0\.0\.23([[:space:]]|$)' <<<"$go_info"
 grep -Eq '^[[:space:]]*dep[[:space:]]+golang\.getoutline\.org/sdk/x[[:space:]]+v0\.2\.0([[:space:]]|$)' <<<"$go_info"
 

@@ -64,11 +64,15 @@ def main() -> None:
             "version": caddy["version"],
             "origin": caddy["module_origin"],
             "commit": caddy["commit"],
+            "ref": f"refs/tags/{caddy['version']}",
         },
         source["outline_server_module"]: {
             "version": source["outline_server_version"],
             "origin": source["outline_server_module_origin"],
             "commit": source["outline_server_commit"],
+            # Go pseudo-versions identify the commit in the version and VCS hash;
+            # this upstream module origin has no Ref field.
+            "ref": None,
         },
     }
     verified = []
@@ -82,11 +86,7 @@ def main() -> None:
             )
         origin = record.get("Origin") or {}
         actual = (origin.get("URL"), origin.get("Hash"), origin.get("Ref"))
-        expected_origin = (
-            pins["origin"],
-            pins["commit"],
-            f"refs/tags/{pins['version']}",
-        )
+        expected_origin = (pins["origin"], pins["commit"], pins["ref"])
         if actual != expected_origin:
             raise SystemExit(
                 f"{module_path} VCS origin is {actual!r}; expected {expected_origin!r}"
