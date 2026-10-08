@@ -83,7 +83,7 @@ The manually dispatched **Manually reviewed Outline Caddy build** workflow build
 the Outline Caddy packet-WebSocket plugin from the exact source tag and pinned
 Caddy, Go, Outline server, and container-image revisions in
 [`caddy-dbby.lock.json`](caddy-dbby.lock.json). The published Caddy binary and
-image use the separate `v2.11.7-dbby` identity; this workflow does not replace
+image use the separate `v2.11.7-r2-dbby` identity; this workflow does not replace
 the Outline server image or deploy to a running host.
 
 The workflow input `source_tag` must match the locked tag. `publish` defaults to
@@ -91,10 +91,10 @@ The workflow input `source_tag` must match the locked tag. `publish` defaults to
 supported image platforms, and uploads a review artifact with the archive,
 checksums, build provenance, OCI image archive, and test logs. After reviewing
 that artifact, dispatch the same locked source tag with `publish=true` to
-publish the immutable GitHub prerelease `caddy-v2.11.7-dbby` and GHCR image
-`ghcr.io/dobbyvpn/outline-caddy:v2.11.7-dbby` for Linux amd64, arm64, arm/v7,
+publish the immutable GitHub prerelease `caddy-v2.11.7-r2-dbby` and GHCR image
+`ghcr.io/dobbyvpn/outline-caddy:v2.11.7-r2-dbby` for Linux amd64, arm64, arm/v7,
 and arm/v6. The release contains
-`caddy_2.11.7-dbby_linux_amd64.tar.gz`, `checksums.txt`, and `build-info.json`.
+`caddy_2.11.7-r2-dbby_linux_amd64.tar.gz`, `checksums.txt`, and `build-info.json`.
 GitHub receives `make_latest=false`; publication downloads and verifies the
 release assets before moving only the `latest-dbby` image alias, then checks
 that the official GitHub latest release and
@@ -102,15 +102,16 @@ that the official GitHub latest release and
 The workflow stops after release and image publication; it does not deploy or
 restart a running service.
 
-The initial `caddy-v2.11.7-dbby` publication completed in this
+The initial `caddy-v2.11.7-dbby` release remains available as a historical
+artifact and recovery option at
+`ghcr.io/dobbyvpn/outline-caddy:v2.11.7-dbby`; its publication completed in this
 [GitHub Actions run](https://github.com/DobbyVPN/outline-tunnel-server/actions/runs/37669868652).
-
-The published `v2.11.7-dbby` uses plugin source based on upstream commit
-`2e9909e67173`, but its nested Go dependency still pins Outline core to
-`v1.9.3-rc2`. Before migration, repin it to
-upstream commit `2e9909e67173be0275d25a381cc5555e0e56d9af`
-(`v1.9.3-rc2.0.20260904072137-2e9909e67173`), validate it, and publish a new
-immutable `dbby` version. This Caddy build has not been deployed. After migration,
+That image used plugin source based on upstream commit `2e9909e67173`, but its
+nested Go dependency still pinned Outline core to `v1.9.3-rc2`. The r2 release
+corrects that dependency to upstream commit
+`2e9909e67173be0275d25a381cc5555e0e56d9af`
+(`v1.9.3-rc2.0.20260904072137-2e9909e67173`) and carries the corresponding
+unmodified upstream UDP fixes. This Caddy build has not been deployed. After migration,
 one Caddy process will handle TLS/ACME, Outline WebSocket traffic, and
 static/account content, replacing guest HAProxy, the standalone service, and the
 certificate-copy timer; ingress/NAT remains.
@@ -151,5 +152,5 @@ sha256sum --check checksums.txt
 To use the multi-platform image:
 
 ```sh
-docker pull ghcr.io/dobbyvpn/outline-caddy:v2.11.7-dbby
+docker pull ghcr.io/dobbyvpn/outline-caddy:v2.11.7-r2-dbby
 ```

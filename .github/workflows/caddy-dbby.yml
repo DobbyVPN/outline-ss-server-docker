@@ -7,7 +7,7 @@ on:
         description: Exact Outline Caddy source tag from caddy-dbby.lock.json
         required: true
         type: string
-        default: outlinecaddy/v0.0.2-dbby
+        default: outlinecaddy/v0.0.3-dbby
       publish:
         description: Publish the verified prerelease and immutable image after artifact review
         required: true
@@ -68,19 +68,19 @@ jobs:
               "source_repository": "DobbyVPN/outliner-tunnel-server-fork",
               "base_commit": "2e9909e67173be0275d25a381cc5555e0e56d9af",
               "server_module": "golang.getoutline.org/tunnel-server",
-              "server_module_origin": "https://github.com/Jigsaw-Code/outline-ss-server",
-          "server_version": "v1.9.3-rc2",
-          "server_commit": "d019cea7add912de4be2cb1a6a0aa8e4c56c1077",
-          "caddy_version": "v2.11.7",
+              "server_module_origin": "https://github.com/OutlineFoundation/tunnel-server",
+              "server_version": "v1.9.3-rc2.0.20260904072137-2e9909e67173",
+              "server_commit": "2e9909e67173be0275d25a381cc5555e0e56d9af",
+              "caddy_version": "v2.11.7",
               "caddy_commit": "72dd0fb067f6d7826c7f79907670ba4a713bfe37",
               "caddy_module_origin": "https://github.com/caddyserver/caddy",
-          "runtime_image": "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f",
-          "go_version": "1.26.8",
-          "builder_image": "golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c",
-              "binary_version": "v2.11.7-dbby",
-              "release_tag": "caddy-v2.11.7-dbby",
+              "runtime_image": "caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f",
+              "go_version": "1.26.8",
+              "builder_image": "golang:1.26.8-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c",
+              "binary_version": "v2.11.7-r2-dbby",
+              "release_tag": "caddy-v2.11.7-r2-dbby",
               "image_repository": "ghcr.io/dobbyvpn/outline-caddy",
-              "image_tag": "v2.11.7-dbby",
+              "image_tag": "v2.11.7-r2-dbby",
               "moving_image_tag": "latest-dbby",
           }
           actual = {
@@ -501,7 +501,7 @@ jobs:
             echo "release archive does not contain the reviewed binary" >&2
             exit 1
           }
-          scripts/verify-caddy-dbby-binary.sh out/caddy v2.11.7-dbby v2.11.7
+          scripts/verify-caddy-dbby-binary.sh out/caddy v2.11.7-r2-dbby v2.11.7
 
       - name: Checkout exact Outline Caddy source tag
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
